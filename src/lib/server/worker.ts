@@ -6,7 +6,6 @@ import {
   processModeration,
   recoverSideEffects,
 } from "./moderation";
-import { processCleanup } from "./cleanup";
 import { HttpError } from "./auth";
 import {
   BillingError,
@@ -35,17 +34,13 @@ export async function runAccount(accountId: string, sync = false) {
           billing.used.xCredits >= billing.limits.xCredits
         )
           throw error;
-        // Exhausting cleanup or AI must not stop the other paid feature.
+        // A depleted analysis quota must not prevent recovering pending blocks.
         quotaMessage = error.message;
       }
     }
     try {
       await requireSubscription(accountId);
       const token = await accessToken(account);
-      // History cleanup must still make progress if the AI provider is unavailable.
-      await withinQuota(() =>
-        processCleanup(account, token, Math.min(deadline, Date.now() + 15_000)),
-      );
       if (
         sync ||
         (account.settings.enabled &&

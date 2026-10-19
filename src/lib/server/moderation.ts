@@ -12,7 +12,13 @@ import { appUrl } from "./config";
 import { query } from "./db";
 import { evaluate } from "./jev";
 import { HttpError } from "./auth";
-import { type Account, type Timeline, accountXRequest, xRequest } from "./x";
+import {
+  type Account,
+  type Timeline,
+  accountXRequest,
+  xRequest,
+  XError,
+} from "./x";
 import { BillingError, billingSnapshot, reserveUsage } from "./billing-access";
 
 export async function ingestMentions(account: Account, token: string) {
@@ -167,19 +173,17 @@ export async function replyAndBlock(
       "UPDATE interactions SET status='replied',reply_id=$3,error=NULL WHERE account_id=$1 AND id=$2",
       [account.id, id, result.data.id],
     );
-  } catch {
+  } catch (error) {
+    const rejected =
+      error instanceof XError && error.status >= 400 && error.status < 500;
+    const message = rejected
+      ? `${error.message} No se volverá a enviar automáticamente.`
+      : "No se ha podido confirmar el envío. Comprueba X; no se reenviará automáticamente para evitar duplicados.";
     await query(
       "UPDATE interactions SET status='error',error=$3 WHERE account_id=$1 AND id=$2",
-      [
-        account.id,
-        id,
-        "No se ha podido confirmar el envío. Comprueba X; no se reenviará automáticamente para evitar duplicados.",
-      ],
+      [account.id, id, message],
     );
-    throw new HttpError(
-      502,
-      "No se ha podido confirmar el envío. Comprueba X; no se reenviará automáticamente.",
-    );
+    throw new HttpError(rejected ? error.status : 502, message);
   }
   await blockAuthor(account.id, token, item);
 }
@@ -206,6 +210,17 @@ async function blockAuthor(
       [accountId, item.id],
     );
   } catch (error) {
+    if (error instanceof XError && error.status === 403) {
+      await query(
+        "UPDATE interactions SET block_requested=false,error=$3 WHERE account_id=$1 AND id=$2 AND status='replied'",
+        [
+          accountId,
+          item.id,
+          `Respuesta enviada, pero no se ha bloqueado al autor. ${error.message} Puedes bloquearlo desde su perfil en X. No se reintentará este bloqueo automáticamente.`,
+        ],
+      );
+      return;
+    }
     await query(
       "UPDATE interactions SET error=$3 WHERE account_id=$1 AND id=$2",
       [
@@ -275,6 +290,7 @@ export async function processModeration(
         "JEV no ha podido evaluar la interacción. Se mantiene pendiente, sin responder ni bloquear.",
       );
     }
+    decision = { ...decision, threshold: account.settings.threshold };
     const route = routeDecision(decision, account.settings);
     if (decision.optOut >= 0.5)
       await query(

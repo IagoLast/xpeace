@@ -47,17 +47,22 @@ export class XError extends Error {
   constructor(
     public status: number,
     public retryAt?: Date,
+    public operation?: "read" | "reply" | "block",
   ) {
     super(
-      status === 429
-        ? "X ha limitado las peticiones. Se reanudará cuando termine la espera."
-        : status === 401
-          ? "La autorización de X ha caducado. Vuelve a conectar la cuenta."
-          : status === 403
-            ? "X ha rechazado la operación. Comprueba los permisos y el acceso de tu aplicación."
-            : status === 402
-              ? "X requiere saldo o acceso adicional para esta operación."
-              : `X no pudo completar la operación (${status}).`,
+      status === 403 && operation === "block"
+        ? "X ha rechazado el bloqueo. Bloquear por API requiere acceso Enterprise, además del permiso block.write."
+        : status === 403 && operation === "reply"
+          ? "X ha rechazado la respuesta. Revisa los permisos de publicación y las restricciones de esa conversación."
+          : status === 429
+            ? "X ha limitado las peticiones. Se reanudará cuando termine la espera."
+            : status === 401
+              ? "La autorización de X ha caducado. Vuelve a conectar la cuenta."
+              : status === 403
+                ? "X ha rechazado la operación. Comprueba los permisos y el acceso de tu aplicación."
+                : status === 402
+                  ? "X requiere saldo o acceso adicional para esta operación."
+                  : `X no pudo completar la operación (${status}).`,
     );
   }
 }
@@ -78,6 +83,21 @@ export async function xRequest<T>(
     },
   });
   if (!response.ok) {
+    const method = (init.method ?? "GET").toUpperCase();
+    const pathname = new URL(`https://api.x.com/2${path}`).pathname;
+    const operation =
+      method === "POST" && /\/blocking$/.test(pathname)
+        ? "block"
+        : method === "POST" && pathname === "/2/tweets"
+          ? "reply"
+          : "read";
+    // Log the operation, never credentials, post text, or provider response bodies.
+    console.error("x_request_failed", {
+      status: response.status,
+      operation,
+      method,
+      endpoint: pathname.replace(/\d+/g, ":id"),
+    });
     const reset = Number(response.headers.get("x-rate-limit-reset"));
     const retry = Number(response.headers.get("retry-after"));
     throw new XError(
@@ -89,6 +109,7 @@ export async function xRequest<T>(
               : Date.now() + (retry > 0 ? retry : 900) * 1000,
           )
         : undefined,
+      operation,
     );
   }
   if (response.status === 204) return {} as T;
@@ -125,13 +146,11 @@ export async function accountXRequest<T>(
   token: string,
   path: string,
   init: RequestInit = {},
-  cleanup = false,
 ): Promise<T> {
   const url = new URL(`https://api.x.com/2${path}`);
   const method = (init.method ?? "GET").toUpperCase();
   const timeline =
-    method === "GET" &&
-    /^\/2\/users\/\d+\/(mentions|tweets|liked_tweets)$/.test(url.pathname);
+    method === "GET" && /^\/2\/users\/\d+\/mentions$/.test(url.pathname);
   let credits: number;
   if (timeline) {
     const expansions = url.searchParams.get("expansions");
@@ -167,19 +186,12 @@ export async function accountXRequest<T>(
     /^\/2\/users\/\d+\/blocking$/.test(url.pathname)
   ) {
     credits = 3;
-  } else if (
-    method === "DELETE" &&
-    (/^\/2\/tweets\/\d+$/.test(url.pathname) ||
-      /^\/2\/users\/\d+\/likes\/\d+$/.test(url.pathname))
-  ) {
-    credits = 2;
   } else {
     throw new Error("Operación de X sin presupuesto definido.");
   }
   const receipt = await reserveUsage(accountId, {
     xRequests: 1,
     xCredits: credits,
-    cleanup: cleanup ? 1 : 0,
   });
   const result = await xRequest<T>(
     token,

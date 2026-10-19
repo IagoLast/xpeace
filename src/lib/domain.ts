@@ -4,7 +4,6 @@ export const BPN_REPLY = "block por nabo 🫜";
 export const BPN_PAGE = "/bpn";
 // A post with a URL costs 40 of our 0.005 USD activity credits.
 export const BPN_REPLY_CREDITS = 40;
-export const ALL_HISTORY_BEFORE = "9999-12-31";
 export const MODEL = "typesafe-ai/jev-1.14.0";
 export const settingsSchema = z.object({
   enabled: z.boolean(),
@@ -17,14 +16,6 @@ export const defaultSettings: Settings = {
   threshold: 0.9,
   allowlist: [],
 };
-export type Kind = "tweets" | "replies" | "likes";
-export const cleanupSchema = z.object({
-  kinds: z
-    .array(z.enum(["tweets", "replies", "likes"]))
-    .min(1)
-    .max(3),
-  before: z.iso.date(),
-});
 export type Decision = {
   abuse: number;
   insult: number;
@@ -32,6 +23,8 @@ export type Decision = {
   label: "insult" | "rude" | "healthy";
   latency: number;
   model: string;
+  // Older evaluations did not record the threshold used for routing.
+  threshold?: number;
 };
 export type Interaction = {
   id: string;
@@ -54,26 +47,10 @@ export type Interaction = {
   reply_id: string | null;
   error: string | null;
 };
-export type CleanupJob = {
-  id: string;
-  kinds: Kind[];
-  before_date: string;
-  status:
-    "scanning" | "ready" | "running" | "completed" | "cancelled" | "error";
-  phase: "tweets" | "likes";
-  cursor: string | null;
-  scanned: number;
-  total: number;
-  done: number;
-  failed: number;
-  error: string | null;
-  created_at: string;
-};
 export type Usage = {
   xRequests: number;
   xCredits: number;
   analyses: number;
-  cleanup: number;
 };
 export type Billing = {
   configured: boolean;
@@ -91,13 +68,10 @@ export type Snapshot = {
   account: { id: string; username: string; name: string };
   settings: Settings;
   interactions: Interaction[];
-  jobs: CleanupJob[];
-  preview: { id: string; text: string; kind: Kind; created_at: string }[];
   stats: {
     analyzed: number;
     flagged: number;
     blocked: number;
-    deleted: number;
   };
   lastSync: string | null;
   lastError: string | null;
@@ -107,19 +81,6 @@ export function routeDecision(decision: Decision, settings: Settings) {
   if (decision.optOut >= 0.5) return "ignored" as const;
   if (decision.abuse < settings.threshold) return "allowed" as const;
   return settings.enabled ? ("send" as const) : ("pending" as const);
-}
-
-export function matchesCleanup(
-  kind: Kind,
-  createdAt: string,
-  kinds: Kind[],
-  before: string,
-) {
-  // Date input denotes a strict UTC cutoff, independent of server/browser timezone.
-  return (
-    kinds.includes(kind) &&
-    Date.parse(createdAt) < Date.parse(`${before}T00:00:00.000Z`)
-  );
 }
 
 export function isOptOut(text: string) {

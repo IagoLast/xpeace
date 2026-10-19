@@ -13,8 +13,8 @@ const base: Billing = {
   status: "none",
   periodEnd: null,
   cancelAtPeriodEnd: false,
-  used: { analyses: 0, cleanup: 0, xRequests: 0, xCredits: 0 },
-  limits: { analyses: 100, cleanup: 50, xRequests: 2000, xCredits: 200 },
+  used: { analyses: 0, xRequests: 0, xCredits: 0 },
+  limits: { analyses: 100, xRequests: 2000, xCredits: 200 },
 };
 
 test.beforeAll(async () => {

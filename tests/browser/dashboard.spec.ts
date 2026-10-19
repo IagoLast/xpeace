@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
 
+test("the retired utilities page is no longer available", async ({
+  request,
+}) => {
+  expect((await request.get("/utilities")).status()).toBe(404);
+});
+
 test("disconnected users can only connect X and receive no sample account data", async ({
   page,
 }) => {

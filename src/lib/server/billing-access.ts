@@ -31,7 +31,6 @@ export function planLimits(): Usage {
     xRequests: limit("BILLING_X_REQUESTS_LIMIT", 2000),
     xCredits: limit("BILLING_X_CREDITS_LIMIT", 200),
     analyses: limit("BILLING_ANALYSES_LIMIT", 100),
-    cleanup: limit("BILLING_CLEANUP_LIMIT", 50),
   };
 }
 
@@ -70,10 +69,8 @@ export async function billingSnapshot(accountId: string): Promise<Billing> {
           x_credits: number;
           x_credit_limit: number;
           analyses: number;
-          cleanup: number;
           x_limit: number;
           analysis_limit: number;
-          cleanup_limit: number;
         }>(
           "SELECT * FROM billing_usage WHERE subscription_id=$1 AND period_start=$2",
           [subscription.id, subscription.period_start],
@@ -100,14 +97,12 @@ export async function billingSnapshot(accountId: string): Promise<Billing> {
       xRequests: usage?.x_requests ?? 0,
       xCredits: usage?.x_credits ?? 0,
       analyses: usage?.analyses ?? 0,
-      cleanup: usage?.cleanup ?? 0,
     },
     limits: usage
       ? {
           xRequests: usage.x_limit,
           xCredits: usage.x_credit_limit,
           analyses: usage.analysis_limit,
-          cleanup: usage.cleanup_limit,
         }
       : planLimits(),
   };
@@ -138,26 +133,24 @@ export async function reserveUsage(accountId: string, amount: Partial<Usage>) {
     xRequests: 0,
     xCredits: 0,
     analyses: 0,
-    cleanup: 0,
     ...amount,
   };
   if (Object.values(delta).some((n) => !Number.isSafeInteger(n) || n < 0))
     throw new Error("Reserva de consumo inválida.");
+  // The retired cleanup_limit column is still required by existing databases.
   const rows = await query<{ subscription_id: string; period_start: string }>(
     `INSERT INTO billing_usage AS u
-      (subscription_id,period_start,x_requests,analyses,cleanup,x_limit,analysis_limit,cleanup_limit,x_credits,x_credit_limit)
-    SELECT s.id,s.period_start,$3,$4,$5,$6,$7,$8,$9,$10 FROM billing_subscriptions s
+      (subscription_id,period_start,x_requests,analyses,x_limit,analysis_limit,x_credits,x_credit_limit,cleanup_limit)
+    SELECT s.id,s.period_start,$3,$4,$5,$6,$7,$8,1 FROM billing_subscriptions s
     WHERE s.account_id=$1 AND ${paidSubscriptionSql}
-      AND $3::int <= $6::int AND $4::int <= $7::int AND $5::int <= $8::int
-      AND $9::int <= $10::int
+      AND $3::int <= $5::int AND $4::int <= $6::int AND $7::int <= $8::int
     ORDER BY s.period_end DESC LIMIT 1
     ON CONFLICT(subscription_id,period_start) DO UPDATE SET
       x_requests=u.x_requests+EXCLUDED.x_requests,
       x_credits=u.x_credits+EXCLUDED.x_credits,
-      analyses=u.analyses+EXCLUDED.analyses,cleanup=u.cleanup+EXCLUDED.cleanup
+      analyses=u.analyses+EXCLUDED.analyses
     WHERE u.x_requests+EXCLUDED.x_requests <= u.x_limit
       AND u.analyses+EXCLUDED.analyses <= u.analysis_limit
-      AND u.cleanup+EXCLUDED.cleanup <= u.cleanup_limit
       AND u.x_credits+EXCLUDED.x_credits <= u.x_credit_limit
     RETURNING subscription_id,period_start`,
     [
@@ -165,10 +158,8 @@ export async function reserveUsage(accountId: string, amount: Partial<Usage>) {
       process.env.STRIPE_PRICE_ID,
       delta.xRequests,
       delta.analyses,
-      delta.cleanup,
       limits.xRequests,
       limits.analyses,
-      limits.cleanup,
       delta.xCredits,
       limits.xCredits,
     ],

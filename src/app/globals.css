@@ -400,33 +400,6 @@ button:not(:disabled),
   border-radius: 0 8px 8px 0;
   background: color-mix(in srgb, var(--primary) 6%, var(--card));
 }
-.section-nav {
-  display: flex;
-  gap: 24px;
-  border-bottom: 1px solid var(--border);
-}
-.section-nav a {
-  padding-block: 10px 14px;
-  font-size: 13px;
-  color: var(--muted-foreground);
-  border-bottom: 2px solid transparent;
-}
-.section-nav a[aria-current="page"] {
-  color: var(--foreground);
-  border-color: var(--primary);
-}
-.utility-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-.utility-link:hover {
-  color: var(--foreground);
-}
 @media (max-width: 480px) {
   .activity-panel {
     padding: 20px;

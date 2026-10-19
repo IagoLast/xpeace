@@ -8,7 +8,7 @@ import type { DashboardApi } from "./dashboard";
 
 const labels: Record<Interaction["status"], string> = {
   pending: "Pendiente",
-  allowed: "Sin problema",
+  allowed: "Sin bloqueo",
   review: "Pendiente de procesar",
   ignored: "Sin acción",
   sending: "Enviando",
@@ -16,6 +16,11 @@ const labels: Record<Interaction["status"], string> = {
   blocked: "Respondida y bloqueada",
   error: "No se pudo completar",
 };
+
+const percent = new Intl.NumberFormat("es-ES", {
+  style: "percent",
+  maximumFractionDigits: 2,
+});
 
 export function ActivityPanel({ data, busy, act }: DashboardApi) {
   const [limit, setLimit] = useState(5);
@@ -59,12 +64,27 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
               <span
                 className={`text-xs ${item.status === "error" ? "text-destructive" : item.status === "blocked" ? "text-primary" : "text-muted-foreground"}`}
               >
-                {labels[item.status]}
+                {item.status === "allowed" &&
+                item.decision?.threshold !== undefined
+                  ? "Por debajo del umbral"
+                  : labels[item.status]}
               </span>
             </div>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
               {item.text}
             </p>
+            {item.decision && (
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                Probabilidad de abuso:{" "}
+                <strong className="font-semibold tabular-nums text-foreground">
+                  {percent.format(item.decision.abuse)}
+                </strong>
+                {" · "}
+                {item.decision.threshold !== undefined
+                  ? `Umbral aplicado: ${percent.format(item.decision.threshold)}`
+                  : `Umbral actual: ${percent.format(data.settings.threshold)} (el de esta evaluación no se registró)`}
+              </p>
+            )}
             {item.reply_id && (
               <p className="mt-2 text-xs text-primary">↳ {BPN_REPLY}</p>
             )}
@@ -72,6 +92,17 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
               <p className="mt-2 text-sm text-destructive" role="alert">
                 {item.error}
               </p>
+            )}
+            {item.status === "replied" && item.error && (
+              <a
+                className="mt-2 inline-flex items-center gap-1 text-xs text-primary underline underline-offset-4"
+                href={`https://x.com/${item.username}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Abrir perfil para bloquear en X
+                <ArrowUpRight className="size-3" />
+              </a>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <time dateTime={item.created_at}>
@@ -86,10 +117,10 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
               {item.decision && (
                 <span>
                   {item.decision.label === "healthy"
-                    ? "Sin malos modos"
+                    ? "Sin indicios claros de abuso"
                     : item.decision.label === "insult"
-                      ? "Insulto detectado"
-                      : "Malos modos detectados"}
+                      ? "Posible insulto"
+                      : "Posibles malos modos"}
                 </span>
               )}
               <a

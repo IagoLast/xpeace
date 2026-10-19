@@ -18,11 +18,6 @@ vi.mock("@neondatabase/serverless", () => ({
 vi.mock("@/lib/server/jev", () => ({ evaluate: mocks.evaluate }));
 import { query, withAccountLock } from "@/lib/server/db";
 import {
-  createPreview,
-  confirmCleanup,
-  processCleanup,
-} from "@/lib/server/cleanup";
-import {
   ingestMentions,
   processModeration,
   recoverSideEffects,
@@ -30,9 +25,6 @@ import {
 } from "@/lib/server/moderation";
 import { getAccount, xRequest, XError } from "@/lib/server/x";
 import { snapshot } from "@/lib/server/snapshot";
-import { runAccount } from "@/lib/server/worker";
-import { seal } from "@/lib/server/crypto";
-import { reserveUsage } from "@/lib/server/billing-access";
 
 let db: PGlite;
 const fetchMock = vi.fn();
@@ -64,7 +56,6 @@ beforeEach(async () => {
   process.env.STRIPE_SECRET_KEY = "sk_test_fixture";
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_fixture";
   process.env.STRIPE_PRICE_ID = "price_fixture";
-  process.env.BILLING_CLEANUP_LIMIT = "500";
   process.env.BILLING_X_CREDITS_LIMIT = "2000";
   await db.exec("TRUNCATE accounts CASCADE; TRUNCATE locks;");
   await query(
@@ -102,6 +93,49 @@ const current = async (id = "100") =>
   )[0];
 
 describe("persistent moderation", () => {
+  it("records the applied threshold and uses changes only for unprocessed messages", async () => {
+    await interaction("pending");
+    mocks.evaluate.mockResolvedValue({
+      ...decision,
+      abuse: 0.89,
+      insult: 0.61,
+    });
+    await processModeration(
+      await getAccount("1"),
+      "token",
+      Date.now() + 10_000,
+    );
+    expect(await current()).toMatchObject({
+      status: "allowed",
+      decision: { abuse: 0.89, threshold: 0.9 },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await query(
+      "UPDATE accounts SET settings=jsonb_set(settings,'{threshold}','0.89') WHERE id='1'",
+    );
+    await interaction("pending", "101", "3");
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { id: "101" } }))
+      .mockResolvedValueOnce(json({ data: { id: "999" } }))
+      .mockResolvedValueOnce(json({ data: { blocking: true } }));
+    await processModeration(
+      await getAccount("1"),
+      "token",
+      Date.now() + 10_000,
+    );
+    expect(await current("101")).toMatchObject({
+      status: "blocked",
+      decision: { abuse: 0.89, threshold: 0.89 },
+    });
+    expect(await current()).toMatchObject({
+      status: "allowed",
+      decision: { threshold: 0.9 },
+    });
+    expect(mocks.evaluate).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("replies with the exact phrase, then blocks, without a second send", async () => {
     await interaction();
     fetchMock
@@ -159,6 +193,51 @@ describe("persistent moderation", () => {
           url === "https://api.x.com/2/tweets" && init.method === "POST",
       ),
     ).toHaveLength(1);
+  });
+  it("stops retrying a forbidden block and still evaluates the following message", async () => {
+    await interaction("pending", "100", "2");
+    await interaction("pending", "101", "3", "Gracias por compartirlo");
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { id: "100" } }))
+      .mockResolvedValueOnce(json({ data: { id: "999" } }))
+      .mockResolvedValueOnce(json({ title: "Forbidden" }, 403));
+    mocks.evaluate
+      .mockResolvedValueOnce(decision)
+      .mockResolvedValueOnce({
+        ...decision,
+        abuse: 0.01,
+        insult: 0.01,
+        label: "healthy",
+      });
+    const account = await getAccount("1");
+    await processModeration(account, "token", Date.now() + 10_000);
+    expect(await current()).toMatchObject({
+      status: "replied",
+      reply_id: "999",
+      block_requested: false,
+      error: expect.stringContaining("Enterprise"),
+    });
+    expect((await current("101")).status).toBe("allowed");
+    await recoverSideEffects(account, "token", Date.now() + 10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+  it("shows a rejected reply as rejected and never attempts its block", async () => {
+    await interaction("pending");
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { id: "100" } }))
+      .mockResolvedValueOnce(json({ title: "Forbidden" }, 403));
+    await expect(
+      replyAndBlock(await getAccount("1"), "token", "100"),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringContaining("rechazado la respuesta"),
+    });
+    expect(await current()).toMatchObject({
+      status: "error",
+      reply_id: null,
+      error: expect.stringContaining("rechazado la respuesta"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it("leaves provider failures pending with no X mutations", async () => {
     await interaction("pending");
@@ -282,157 +361,7 @@ describe("persistent moderation", () => {
   });
 });
 
-describe("cleanup with a durable preview", () => {
-  it("scans all pages and likes without deletion, then deletes only confirmed matches", async () => {
-    const id = await createPreview(
-      "1",
-      ["tweets", "replies", "likes"],
-      "2025-01-01",
-    );
-    const post = (id: string, created_at: string, reply = false) => ({
-      id,
-      created_at,
-      text: id,
-      referenced_tweets: reply ? [{ type: "replied_to", id: "10" }] : [],
-    });
-    fetchMock
-      .mockResolvedValueOnce(
-        json({
-          data: [
-            post("11", "2024-01-01T00:00:00Z"),
-            post("12", "2025-02-01T00:00:00Z"),
-          ],
-          meta: { next_token: "page2" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        json({ data: [post("13", "2024-01-01T00:00:00Z", true)], meta: {} }),
-      )
-      .mockResolvedValueOnce(
-        json({ data: [post("14", "2024-01-01T00:00:00Z")], meta: {} }),
-      );
-    const account = await getAccount("1");
-    await processCleanup(account, "token", Date.now() + 10_000);
-    await expect(confirmCleanup("1", id)).rejects.toThrow(
-      "todavía no está lista",
-    );
-    await processCleanup(account, "token", Date.now() + 10_000);
-    await processCleanup(account, "token", Date.now() + 10_000);
-    expect((await snapshot(account)).jobs[0]).toMatchObject({
-      total: 3,
-      scanned: 4,
-      status: "ready",
-    });
-    expect(fetchMock.mock.calls.every(([, init]) => !init.method)).toBe(true);
-    await expect(confirmCleanup("other-account", id)).rejects.toThrow();
-    await confirmCleanup("1", id);
-    fetchMock.mockImplementation(async (url: string) =>
-      json({
-        data: url.includes("/likes/") ? { liked: false } : { deleted: true },
-      }),
-    );
-    await processCleanup(account, "token", Date.now() + 10_000);
-    expect((await snapshot(account)).jobs[0]).toMatchObject({
-      total: 3,
-      done: 3,
-      status: "completed",
-    });
-    const deleted = fetchMock.mock.calls
-      .filter(([, init]) => init.method === "DELETE")
-      .map(([url]) => url);
-    expect(deleted).toEqual(
-      expect.arrayContaining([
-        "https://api.x.com/2/tweets/11",
-        "https://api.x.com/2/tweets/13",
-        "https://api.x.com/2/users/1/likes/14",
-      ]),
-    );
-    expect(deleted.some((url) => url.endsWith("/12"))).toBe(false);
-  });
-  it("keeps a rate-limited deletion pending and can resume", async () => {
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    fetchMock.mockResolvedValueOnce(
-      json({
-        data: [{ id: "11", text: "old", created_at: "2024-01-01T00:00:00Z" }],
-      }),
-    );
-    const account = await getAccount("1");
-    await processCleanup(account, "token", Date.now() + 10_000);
-    await confirmCleanup("1", id);
-    fetchMock.mockResolvedValueOnce(json({}, 429, { "retry-after": "900" }));
-    await expect(
-      processCleanup(account, "token", Date.now() + 10_000),
-    ).rejects.toMatchObject({ status: 429 });
-    expect((await snapshot(account)).jobs[0]).toMatchObject({
-      status: "running",
-      done: 0,
-    });
-    fetchMock.mockResolvedValueOnce(json({ data: { deleted: true } }));
-    await processCleanup(account, "token", Date.now() + 10_000);
-    expect((await snapshot(account)).jobs[0]).toMatchObject({
-      status: "completed",
-      done: 1,
-    });
-  });
-  it("prevents overlapping previews and honors cancellation", async () => {
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    await expect(createPreview("1", ["likes"], "2025-01-01")).rejects.toThrow(
-      "actual",
-    );
-    await query("UPDATE cleanup_jobs SET status='cancelled' WHERE id=$1", [id]);
-    await processCleanup(await getAccount("1"), "token", Date.now() + 10_000);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
 describe("external boundaries", () => {
-  it("keeps moderation progressing when only the cleanup quota is exhausted", async () => {
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    await query("UPDATE cleanup_jobs SET status='running' WHERE id=$1", [id]);
-    await query(
-      `INSERT INTO cleanup_items(job_id,id,kind,text,created_at)
-      VALUES($1,'10','tweets','old',now()-interval '2 years')`,
-      [id],
-    );
-    await reserveUsage("1", { cleanup: 500 });
-    await interaction("pending");
-    await query("UPDATE accounts SET tokens=$1,last_sync=now() WHERE id='1'", [
-      seal({ access_token: "test", expires_in: 3600 }, "tokens:1"),
-    ]);
-    mocks.evaluate.mockResolvedValueOnce({
-      ...decision,
-      abuse: 0.01,
-      label: "healthy",
-    });
-    await runAccount("1");
-    expect((await current()).status).toBe("allowed");
-    expect(await query("SELECT status FROM cleanup_items")).toEqual([
-      { status: "pending" },
-    ]);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-  it("keeps cleanup progressing when JEV is unavailable", async () => {
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    fetchMock.mockResolvedValueOnce(
-      json({
-        data: [{ id: "11", text: "old", created_at: "2024-01-01T00:00:00Z" }],
-      }),
-    );
-    await processCleanup(await getAccount("1"), "token", Date.now() + 10_000);
-    await confirmCleanup("1", id);
-    await interaction("pending");
-    await query("UPDATE accounts SET tokens=$1,last_sync=now() WHERE id='1'", [
-      seal({ access_token: "test", expires_in: 3600 }, "tokens:1"),
-    ]);
-    fetchMock.mockResolvedValueOnce(json({ data: { deleted: true } }));
-    mocks.evaluate.mockRejectedValueOnce(new Error("provider down"));
-    await expect(runAccount("1")).rejects.toThrow("JEV");
-    expect((await snapshot(await getAccount("1"))).jobs[0]).toMatchObject({
-      status: "completed",
-      done: 1,
-    });
-    expect((await current()).status).toBe("pending");
-  });
   it("serializes concurrent work using the database lease", async () => {
     await withAccountLock("1", async () => {
       await expect(

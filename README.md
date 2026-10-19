@@ -1,6 +1,6 @@
 # xpeace
 
-Una app en español que analiza respuestas y menciones de X, responde **block por nabo 🫜** y bloquea automáticamente los malos modos. Incluye historial de evaluaciones, sesión, suscripción y modo claro/oscuro; la limpieza tiene su propia sección de utilidades. Next.js App Router, TypeScript, Tailwind y componentes shadcn/ui, preparado para Vercel con Neon Postgres.
+Una app en español que analiza respuestas y menciones de X, responde **block por nabo 🫜** y solicita el bloqueo de los malos modos cuando el acceso de la aplicación a X lo permite. Incluye historial de evaluaciones, sesión, suscripción, modo claro/oscuro y un control visual de sensibilidad. Next.js App Router, TypeScript, Tailwind y componentes shadcn/ui, preparado para Vercel con Neon Postgres.
 
 Instancia: [xpeace.vercel.app](https://xpeace.vercel.app), en el proyecto `iago-lastras-projects/xpeace`. Base de datos Neon `xpeace-db` en Frankfurt, plan Free. El cron está configurado para Hobby, una vez al día.
 
@@ -19,7 +19,7 @@ npm install
 npm run dev -- --hostname 127.0.0.1 --port 3000
 ```
 
-Abre [127.0.0.1:3000](http://127.0.0.1:3000) y pulsa **Iniciar sesión con X**. La configuración, la actividad y la limpieza solo aparecen después de autorizar una cuenta.
+Abre [127.0.0.1:3000](http://127.0.0.1:3000) y pulsa **Iniciar sesión con X**. La configuración y la actividad solo aparecen después de autorizar una cuenta.
 
 ## Conectar una cuenta real
 
@@ -40,7 +40,7 @@ Para un despliegue personal, configura `ALLOWED_X_USER_IDS` con tu ID de X. Si s
 
 Checkout permite introducir códigos promocionales creados en Stripe. Los cupones del 100 % pueden activar la suscripción sin tarjeta cuando no hay importe que pagar; la factura de 0 marcada como pagada concede el mismo acceso y los mismos límites mensuales. La duración y las restricciones se gestionan en Stripe, sin publicar los códigos en el cliente ni en este repositorio. Las sesiones abiertas de una versión anterior se sustituyen al volver a pulsar **Suscribirme** para que admitan descuentos.
 
-Incluye 200 créditos de actividad en X, hasta 100 análisis con JEV y hasta 50 operaciones de limpieza por período pagado. Todo el trabajo en X comparte esos 200 créditos: leer una publicación cuesta 1, consultar un autor 2, publicar la respuesta con URL 40, bloquear 3 y eliminar una publicación o un like 2. Los máximos de análisis y limpieza no son adicionales al saldo de X. Por ejemplo, leer 10 menciones con 10 autores distintos usa 30 créditos; comprobar, responder y bloquear una de ellas añade 44.
+Incluye 200 créditos de actividad en X y hasta 100 análisis con JEV por período pagado. Todo el trabajo en X comparte esos 200 créditos: leer una publicación cuesta 1, consultar un autor 2, publicar la respuesta con URL 40 y bloquear 3. El máximo de análisis no es adicional al saldo de X. Por ejemplo, leer 10 menciones con 10 autores distintos usa 30 créditos; comprobar, responder y bloquear una de ellas añade 44.
 
 La estimación reserva **1 USD por usuario y mes para X**: cada crédito representa 0,005 USD con las [tarifas publicadas de X](https://docs.x.com/x-api/getting-started/pricing), sin depender de descuentos de propietario ni deduplicación. JEV publica [0,04 USD por millón de tokens de entrada](https://vercel.com/ai-gateway/models/jev); su coste varía con la longitud. Para la cuenta española, [Stripe](https://stripe.com/es/pricing) publica 1,5 % + 0,25 EUR con tarjetas estándar del EEE, 0,7 % adicional por Billing y posibles recargos por tarjeta/divisa. Presupuestar aproximadamente 0,40–0,60 USD por cobro deja alrededor de 1,39–1,59 USD antes de JEV, impuestos, alojamiento y soporte. Es una estimación de uso ligero, no una garantía de margen. Vercel Hobby no permite uso comercial: cambiar a un plan apto para vender antes del lanzamiento.
 
@@ -79,7 +79,7 @@ La versión está publicada y el saldo de X/JEV ha sido comprobado con llamadas 
    ```
 
 5. Ejecuta `npm run db:migrate` en la base de datos del entorno correspondiente antes de desplegar. Aplica todas las migraciones idempotentes de `db/`, incluidas `003-x-credits.sql` y `004-automatic-bpn.sql`; conserva las cuentas y el historial existentes. Sin configuración de Stripe, el procesamiento queda bloqueado, incluso para cuentas antiguas.
-6. Los valores del plan son `BILLING_X_CREDITS_LIMIT=200`, `BILLING_ANALYSES_LIMIT=100`, `BILLING_CLEANUP_LIMIT=50` y un tope técnico de `BILLING_X_REQUESTS_LIMIT=2000`, que incluye consultas vacías. Los cupos se fijan al activar cada período pagado; cambiarlos no altera el cupo del período en curso. La migración de créditos inicia este contador para períodos antiguos; revisa manualmente su consumo previo si migras una instalación que ya tenga suscripciones.
+6. Los valores del plan son `BILLING_X_CREDITS_LIMIT=200`, `BILLING_ANALYSES_LIMIT=100` y un tope técnico de `BILLING_X_REQUESTS_LIMIT=2000`, que incluye consultas vacías. Los cupos se fijan al activar cada período pagado; cambiarlos no altera el cupo del período en curso. La migración de créditos inicia este contador para períodos antiguos; revisa manualmente su consumo previo si migras una instalación que ya tenga suscripciones.
 
 Para probar webhooks en local:
 
@@ -93,10 +93,10 @@ Al pasar a producción, usa las claves, el precio, el portal y el secreto de web
 
 ### Acceso y consumo
 
-- Se exige `active`, factura actual pagada, precio autorizado y período vigente. No se conceden pruebas gratuitas. Un impago pausa el procesamiento; la cancelación programada conserva el acceso durante el período pagado. **Cerrar sesión** invalida la sesión y mantiene BPN y los trabajos en marcha. **Cancelar suscripción** abre directamente el flujo de baja de Stripe para la suscripción de la cuenta autenticada; **Gestionar suscripción** abre tarjetas y facturas.
+- Se exige `active`, factura actual pagada, precio autorizado y período vigente. No se conceden pruebas gratuitas. Un impago pausa el procesamiento; la cancelación programada conserva el acceso durante el período pagado. **Cerrar sesión** invalida la sesión y mantiene BPN en marcha. **Cancelar suscripción** abre directamente el flujo de baja de Stripe para la suscripción de la cuenta autenticada; **Gestionar suscripción** abre tarjetas y facturas.
 - Los webhooks verifican la firma sobre el cuerpo original, recuperan el estado actual en Stripe y registran los eventos procesados. Duplicados, eventos desordenados y reintentos no reinician el consumo. Checkout reutiliza sesiones abiertas y usa bloqueo e idempotencia para evitar suscripciones duplicadas desde la aplicación.
-- El servidor reserva cupo atómicamente antes de cada petición de X, cada evaluación de JEV y cada eliminación. Reserva el coste máximo de una página, incluyendo autores expandidos, y libera solo los créditos sobrantes de respuestas completas y correctas, contra el período original. Limita las páginas a 20 publicaciones y las reduce según el saldo; X exige al menos 5 publicaciones por petición (15 créditos con autores). Si no alcanza para esa consulta, se pausa aunque quede saldo para otra operación menor. Errores y envíos ambiguos conservan toda la reserva. Al agotarse un cupo se guarda el progreso; el período siguiente obtiene contadores nuevos. No se reinician por reconexión.
-- Las comprobaciones cubren acciones del panel, llamadas directas a la API y cron. Leer la actividad, desactivar BPN, cancelar trabajos y abrir el portal no requieren tener una suscripción activa.
+- El servidor reserva cupo atómicamente antes de cada petición de X y cada evaluación de JEV. Reserva el coste máximo de una página, incluyendo autores expandidos, y libera solo los créditos sobrantes de respuestas completas y correctas, contra el período original. Limita las páginas a 20 publicaciones y las reduce según el saldo; X exige al menos 5 publicaciones por petición (15 créditos con autores). Si no alcanza para esa consulta, se pausa aunque quede saldo para otra operación menor. Errores y envíos ambiguos conservan toda la reserva. Al agotarse un cupo se guarda el progreso; el período siguiente obtiene contadores nuevos. No se reinician por reconexión.
+- Las comprobaciones cubren acciones del panel, llamadas directas a la API y cron. Leer la actividad, desactivar BPN y abrir el portal no requieren tener una suscripción activa.
 - El presupuesto de X depende de sus tarifas vigentes; revisa el coste antes de añadir endpoints o modificar el coste de las operaciones. Las tarifas, los créditos y las alertas de gasto de X y AI Gateway se gestionan por separado de Stripe. Las llamadas iniciales de OAuth/identidad no están incluidas en el cupo por cuenta. La evaluación de JEV varía en longitud y no tiene un presupuesto monetario medido.
 - Si reembolsas una suscripción o recibes una disputa, cancela también la suscripción en Stripe cuando quieras retirar el servicio. Un reembolso por sí solo no cancela una suscripción; esta versión sincroniza el ciclo de suscripción y pago, no automatiza decisiones sobre disputas.
 
@@ -104,35 +104,27 @@ El botón de baja utiliza el [flujo directo de cancelación del portal de Stripe
 
 Referencias: [Checkout para suscripciones](https://docs.stripe.com/payments/checkout/build-subscriptions), [webhooks](https://docs.stripe.com/billing/subscriptions/webhooks) y [portal](https://docs.stripe.com/customer-management).
 
-Scopes solicitados: `tweet.read tweet.write users.read like.read like.write block.read block.write offline.access`. Se usan PKCE S256, comprobación de `state`, cookies HttpOnly/SameSite y cifrado AES-256-GCM para credenciales. El refresh de tokens se serializa con las demás operaciones de la cuenta.
+Scopes solicitados: `tweet.read tweet.write users.read block.read block.write offline.access`. Se usan PKCE S256, comprobación de `state`, cookies HttpOnly/SameSite y cifrado AES-256-GCM para credenciales. El refresh de tokens se serializa con las demás operaciones de la cuenta.
 
-## Limpieza
-
-- En **Utilidades** (`/utilities`), selecciona tweets, likes y/o respuestas. Puedes elegir **Todo el historial** accesible o una fecha límite exclusiva en UTC.
-- **Preparar vista previa** recorre las páginas disponibles y guarda una selección persistente. No borra nada durante esta fase.
-- Revisa la muestra, el total y confirma escribiendo `BORRAR`.
-- El trabajo elimina en lotes de hasta diez elementos. Los likes se retiran de tu cuenta; no se eliminan los posts de otras personas. La fecha de los likes corresponde a la publicación, no al momento de dar me gusta.
-- Puedes cancelar. Una petición que ya se está ejecutando puede terminar; los elementos ya eliminados no se restauran.
-- Se respetan los límites de X y se guarda el progreso. Los errores individuales se contabilizan. Una nueva vista previa permite volver a intentar esos elementos.
-
-**Límite de alcance:** solo se procesa el historial accesible por los endpoints y el nivel de acceso de tu aplicación en X. La paginación no evita los límites de profundidad/retención de la API. Todavía no hay importación del archivo completo de X. Los reposts se excluyen. Los tweets y respuestas borrados no son recuperables.
+Las utilidades de limpieza se han retirado: no hay pantalla `/utilities`, acciones de borrado ni procesamiento de trabajos de limpieza. Las tablas históricas y las migraciones existentes se conservan; la columna obligatoria `cleanup_limit` recibe un valor de compatibilidad al crear períodos, pero ya no se expone ni se utiliza como cupo. No hace falta una migración adicional para esta retirada.
 
 ## BPN
 
-JEV se invoca usando `experimental_decide` de AI SDK 7, con el modelo verificado `typesafe-ai/jev-1.14.0`, a través de Vercel AI Gateway. Es un modelo de decisiones: devuelve probabilidades de abuso, insulto explícito y petición de baja. No se le pide generar la respuesta; el texto enviado es **`block por nabo 🫜 ${APP_URL}/bpn`**. La página pública `/bpn` explica cómo xpeace analiza, responde y bloquea; aclara que quien llega desde una respuesta automática probablemente ha sido bloqueado.
+JEV se invoca usando `experimental_decide` de AI SDK 7, con el modelo verificado `typesafe-ai/jev-1.14.0`, a través de Vercel AI Gateway. Es un modelo de decisiones: devuelve probabilidades de abuso, insulto explícito y petición de baja. No se le pide generar la respuesta; el texto enviado es **`block por nabo 🫜 ${APP_URL}/bpn`**. La página pública `/bpn` explica cómo xpeace analiza, responde y bloquea; aclara que la respuesta automática no confirma el bloqueo.
 
 - Recoge menciones y respuestas desde la conexión inicial de la cuenta. No evalúa likes ni reposts sin texto, mensajes privados ni imágenes.
-- Por defecto BPN está desactivado. Al activarlo con una suscripción, JEV clasifica tanto respuestas directas como menciones; las que superan el umbral reciben la respuesta y el bloqueo automáticamente. El interruptor guarda inmediatamente.
-- **Actividad reciente** muestra las evaluaciones, su resultado y un enlace a la publicación. No hay revisión manual, opciones avanzadas ni probador. Las decisiones pendientes se conservan para continuar cuando haya tiempo o cupo, sin repetir la evaluación. Las interacciones antiguas en estado `review` pasan a esta misma cola automática.
-- Umbral interno inicial: 90% de probabilidad de abuso. Debe ajustarse con ejemplos reales de tu cuenta; una probabilidad alta no garantiza una clasificación correcta.
+- Por defecto BPN está desactivado. Al activarlo con una suscripción, JEV clasifica tanto respuestas directas como menciones; las que superan el umbral reciben una respuesta y un intento de bloqueo. El interruptor guarda inmediatamente.
+- **Actividad reciente** muestra las evaluaciones, la probabilidad de abuso, el umbral aplicado, su resultado y un enlace a la publicación. Las evaluaciones antiguas no guardaban el umbral: se muestra el actual identificado como tal. Las etiquetas «Posible insulto» y «Posibles malos modos» describen indicios desde el 50%; el bloqueo depende de la probabilidad de abuso y del umbral configurado. Las decisiones pendientes se conservan para continuar cuando haya tiempo o cupo, sin repetir la evaluación. Las interacciones antiguas en estado `review` pasan a esta misma cola automática.
+- Umbral inicial: 90% de probabilidad de abuso, visible y ajustable entre 60% y 99% mediante la barra de sensibilidad del panel. Moverla hacia «Más sensible» reduce el umbral. Se guarda con **Guardar sensibilidad** y se aplica a mensajes pendientes y nuevos; no vuelve a procesar el historial. Debe ajustarse con ejemplos reales de tu cuenta; una probabilidad alta no garantiza una clasificación correcta.
+- **Limitación de X:** bloquear y desbloquear por API requiere [acceso Enterprise](https://docs.x.com/x-api/users/blocks/integrate), además de los scopes OAuth. La configuración de pago por uso actual no permite garantizar el bloqueo automático. Tener `block.write` no basta. El panel y la página pública distinguen respuesta enviada de bloqueo confirmado.
 - Las cuentas de confianza quedan excluidas. `STOP`, `no me respondas` y peticiones de baja reconocidas por JEV excluyen persistentemente al autor.
 - Máximo de 25 intentos de respuesta por cuenta en 24 horas y uno por autor en ese período; las cuentas ya bloqueadas no reciben nuevas respuestas.
-- Cada intento de publicación se registra **antes** de llamar a X. Si se interrumpe o el resultado es incierto, se pide revisar X y **no se reenvía**. Si la respuesta se publicó pero el bloqueo falló, se reintenta solamente el bloqueo.
+- Cada intento de publicación se registra **antes** de llamar a X. Si se interrumpe o el resultado es incierto, se pide revisar X y **no se reenvía**. Si la respuesta se publicó pero el bloqueo falló temporalmente, se reintenta solamente el bloqueo. Un rechazo 403 detiene los reintentos de ese bloqueo y muestra un enlace al perfil para bloquear manualmente. La cola puede continuar evaluando los siguientes mensajes.
 - Si JEV falla o su salida no es válida, no se responde ni se bloquea. La interacción permanece pendiente.
 
 Antes de operar respuestas automáticas, consulta las [reglas de automatización de X](https://help.x.com/en/rules-and-policies/x-automation): X exige aprobación previa para bots de respuestas con IA, consentimiento del destinatario y una vía sencilla de baja. Explica en tu perfil cómo pedirla. Estos requisitos del proveedor se documentan aquí; el producto no incorpora un flujo de revisión humana.
 
-Los textos enviados a evaluación se comparten con Vercel AI Gateway y TypeSafe AI. La base de datos guarda interacciones, decisiones, selecciones de limpieza y credenciales cifradas. Cerrar sesión conserva las credenciales y el procesamiento en segundo plano. La acción de API `disconnect`, separada de cerrar sesión, borra las credenciales y detiene los trabajos; se conserva el registro de actividad. La autorización del proveedor puede revocarse también desde los ajustes de aplicaciones conectadas en X.
+Los textos enviados a evaluación se comparten con Vercel AI Gateway y TypeSafe AI. La base de datos guarda interacciones, decisiones, credenciales cifradas. Cerrar sesión conserva las credenciales y el procesamiento en segundo plano. La acción de API `disconnect`, separada de cerrar sesión, borra las credenciales y detiene los trabajos; se conserva el registro de actividad. La autorización del proveedor puede revocarse también desde los ajustes de aplicaciones conectadas en X.
 
 ## Desplegar en Vercel
 
@@ -144,7 +136,9 @@ Los textos enviados a evaluación se comparten con Vercel AI Gateway y TypeSafe 
 
 Para ejecutarlo cada cinco minutos, cambia el horario a `*/5 * * * *` en un equipo Pro o usa un planificador externo autenticado. Hobby permite cron diario y no garantiza el minuto exacto de ejecución. Comprueba los [límites actuales de Cron](https://vercel.com/docs/cron-jobs/usage-and-pricing).
 
-El worker procesa una cuenta por invocación, priorizando la menos recientemente atendida. Es una primera versión orientada a uso personal; varias cuentas alargan la cadencia. Las funciones tienen un límite de 60 segundos y las tareas guardan su avance entre invocaciones. Con la limpieza abierta en el navegador, el panel impulsa otro lote cada ocho segundos; en segundo plano continúa el cron. La frecuencia también depende de los límites y del saldo de X.
+Un cron cada minuto usaría `* * * * *` en Pro, pero ese cambio por sí solo no consulta X cada minuto: el worker espera cuatro minutos entre sincronizaciones, salvo paginación pendiente o actualización manual. Para consultas cada minuto también habría que ajustar esa espera y el cupo de peticiones: serían unas 43.200 consultas por cuenta en 30 días frente al límite inicial de 2.000. Las consultas vacías consumen ese cupo interno aunque no devuelvan recursos facturables de X. El consumo de funciones, base de datos, X y evaluaciones de IA se contabiliza por separado.
+
+El worker procesa una cuenta por invocación, priorizando la menos recientemente atendida. Es una primera versión orientada a uso personal; varias cuentas alargan la cadencia. Las funciones tienen un límite de 60 segundos y las tareas guardan su avance entre invocaciones. El panel refresca el historial guardado cada ocho segundos; el cron y el botón **Actualizar** consultan las menciones y procesan BPN. La frecuencia también depende de los límites y del saldo de X.
 
 Los proveedores X, Neon y AI Gateway pueden tener costes y requisitos de acceso independientes de Vercel. No se presupone una cuota gratuita específica.
 
@@ -160,7 +154,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Los tests de servidor usan PostgreSQL embebido (PGlite), las consultas SQL de producción, el adaptador real de X con HTTP simulado y el modelo de prueba oficial de AI SDK. Cubren paginación, aislamiento por cuenta, confirmación, cancelación, límites, opt-outs, reanudación y publicaciones ambiguas. Playwright comprueba la pantalla de conexión, el diseño móvil y el rechazo de peticiones sin sesión. **No sustituyen una prueba con una cuenta real y credenciales propias.**
+Los tests de servidor usan PostgreSQL embebido (PGlite), las consultas SQL de producción, el adaptador real de X con HTTP simulado y el modelo de prueba oficial de AI SDK. Cubren paginación, aislamiento por cuenta, sensibilidad, límites, opt-outs, reanudación y publicaciones ambiguas. Playwright comprueba la pantalla de conexión, el diseño móvil y el rechazo de peticiones sin sesión. **No sustituyen una prueba con una cuenta real y credenciales propias.**
 
 La facturación se prueba con el SDK real de Stripe y HTTP simulado: firmas, identidad del cliente, altas, impagos, cancelaciones, renovación de cupos, concurrencia, reintentos y bloqueo de consumo. Playwright compila y arranca esta versión en `127.0.0.1:3100`, sin reutilizar tu servidor de desarrollo. El panel de cuenta y la pantalla de facturación se montan con sus componentes y estilos reales y respuestas HTTP simuladas, para no conectar las pruebas de navegador a una cuenta o base de datos real.
 

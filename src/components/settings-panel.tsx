@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Check, LogOut, ShieldCheck } from "lucide-react";
 import { Button } from "./ui/button";
@@ -25,7 +26,12 @@ export function BpnPanel({ data, busy, act }: DashboardApi) {
       </div>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
         Analiza las respuestas a tus tweets y tus menciones. Si alguien se pasa,
-        responde y bloquea automáticamente.
+        responde y solicita el bloqueo.
+      </p>
+      <p className="notice mt-4 text-sm">
+        X exige acceso Enterprise para bloquear desde una aplicación. Si X
+        rechaza el bloqueo, verás el motivo y un enlace al perfil para hacerlo
+        manualmente. Una respuesta enviada no confirma un bloqueo.
       </p>
       <div className="reply-preview mt-5">
         <p className="text-sm font-medium">{BPN_REPLY}</p>
@@ -63,7 +69,100 @@ export function BpnPanel({ data, busy, act }: DashboardApi) {
           }
         />
       </div>
+      <BpnThreshold
+        key={data.settings.threshold}
+        data={data}
+        busy={busy}
+        act={act}
+      />
     </Card>
+  );
+}
+
+function BpnThreshold({ data, busy, act }: DashboardApi) {
+  const saved = Math.round(data.settings.threshold * 100);
+  const [percentage, setPercentage] = useState(saved);
+  const sensitivity =
+    percentage >= 90 ? "Baja" : percentage >= 75 ? "Media" : "Alta";
+  const disabled = busy || (data.settings.enabled && !data.billing.active);
+  return (
+    <form
+      className="mt-5 border-t pt-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (disabled || percentage === saved) return;
+        void act(
+          {
+            action: "settings",
+            settings: { ...data.settings, threshold: percentage / 100 },
+          },
+          "Sensibilidad guardada",
+        );
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="bpn-sensitivity">Sensibilidad de BPN</Label>
+        <span className="rounded-full bg-accent px-2.5 py-1 text-xs font-medium text-primary">
+          {sensitivity}
+        </span>
+      </div>
+      <input
+        id="bpn-sensitivity"
+        type="range"
+        min={0}
+        max={39}
+        step={1}
+        value={99 - percentage}
+        onChange={(event) => setPercentage(99 - Number(event.target.value))}
+        disabled={disabled}
+        aria-valuetext={`${sensitivity}; umbral de bloqueo ${percentage} %`}
+        aria-describedby="bpn-sensitivity-help bpn-sensitivity-scope"
+        className="mt-3 h-8 w-full cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <div
+        className="flex justify-between text-xs text-muted-foreground"
+        aria-hidden="true"
+      >
+        <span>Menos sensible</span>
+        <span>Más sensible</span>
+      </div>
+      <p
+        id="bpn-sensitivity-help"
+        className="mt-4 text-sm leading-relaxed text-muted-foreground"
+      >
+        Responde y bloquea a partir de un{" "}
+        <output
+          htmlFor="bpn-sensitivity"
+          className="font-semibold tabular-nums text-foreground"
+        >
+          {percentage} %
+        </output>{" "}
+        de probabilidad de abuso. Más sensibilidad hace que actúe ante más
+        mensajes.
+      </p>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          disabled={disabled || percentage === saved}
+        >
+          Guardar sensibilidad
+        </Button>
+        {percentage !== saved && (
+          <span className="text-xs text-muted-foreground">
+            Cambios sin guardar
+          </span>
+        )}
+      </div>
+      <p
+        id="bpn-sensitivity-scope"
+        className="mt-3 text-xs leading-relaxed text-muted-foreground"
+      >
+        Se aplica a los mensajes pendientes y nuevos. No vuelve a procesar el
+        historial.
+      </p>
+    </form>
   );
 }
 

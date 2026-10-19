@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultSettings,
-  matchesCleanup,
   routeDecision,
   settingsSchema,
   type Decision,
@@ -41,37 +40,6 @@ describe("BPN routing", () => {
       settingsSchema.safeParse({ ...automatic, allowlist: ["<script>"] })
         .success,
     ).toBe(false);
-  });
-});
-describe("cleanup cutoff", () => {
-  it("applies type selection and a strict UTC cutoff", () => {
-    expect(
-      matchesCleanup(
-        "tweets",
-        "2024-12-31T23:59:59Z",
-        ["tweets"],
-        "2025-01-01",
-      ),
-    ).toBe(true);
-    expect(
-      matchesCleanup(
-        "tweets",
-        "2025-01-01T00:00:00Z",
-        ["tweets"],
-        "2025-01-01",
-      ),
-    ).toBe(false);
-    expect(
-      matchesCleanup(
-        "replies",
-        "2024-01-01T00:00:00Z",
-        ["tweets"],
-        "2025-01-01",
-      ),
-    ).toBe(false);
-    expect(matchesCleanup("likes", "invalid", ["likes"], "2025-01-01")).toBe(
-      false,
-    );
   });
 });
 describe("encrypted credentials", () => {

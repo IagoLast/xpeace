@@ -28,11 +28,6 @@ import { createCheckout, refreshBilling } from "@/lib/server/billing";
 import { stripe } from "@/lib/server/stripe";
 import { accountXRequest, getAccount } from "@/lib/server/x";
 import { runAccount } from "@/lib/server/worker";
-import {
-  createPreview,
-  confirmCleanup,
-  processCleanup,
-} from "@/lib/server/cleanup";
 import { replyAndBlock } from "@/lib/server/moderation";
 import { POST as webhook } from "@/app/api/billing/webhook/route";
 import { POST as checkout } from "@/app/api/billing/checkout/route";
@@ -118,7 +113,6 @@ beforeEach(async () => {
   process.env.STRIPE_PRICE_ID = price.id;
   process.env.BILLING_X_REQUESTS_LIMIT = "4";
   process.env.BILLING_ANALYSES_LIMIT = "2";
-  process.env.BILLING_CLEANUP_LIMIT = "1";
   process.env.BILLING_X_CREDITS_LIMIT = "200";
   process.env.CRON_SECRET = "cron_test";
   for (const id of ["1", "2"])
@@ -338,10 +332,9 @@ describe("subscription checkout and ownership", () => {
     ).toBe(401);
     expect(fetchMock).not.toHaveBeenCalled();
   });
-  it("ends the session while keeping BPN, tokens, subscription and cleanup running", async () => {
+  it("ends the session while keeping BPN, tokens and subscription active", async () => {
     await activate();
     const before = await getAccount("1");
-    const job = await createPreview("1", ["tweets"], "2025-01-01");
     expect(
       (await actions(request("/api/actions", { action: "logout" }))).status,
     ).toBe(200);
@@ -350,9 +343,6 @@ describe("subscription checkout and ownership", () => {
     expect(after.settings.enabled).toBe(true);
     expect(after.session_version).toBe(before.session_version + 1);
     expect((await billingSnapshot("1")).active).toBe(true);
-    expect(
-      await query("SELECT status FROM cleanup_jobs WHERE id=$1", [job]),
-    ).toEqual([{ status: "scanning" }]);
     expect(
       (
         await actions(
@@ -559,6 +549,68 @@ describe("signed Stripe events and paid periods", () => {
 });
 
 describe("cost controls on real worker and API paths", () => {
+  it.each(["preview", "confirm", "cancel", "work"])(
+    "rejects the retired %s action even for a paid account",
+    async (action) => {
+      await activate();
+      const response = await actions(
+        request("/api/actions", {
+          action,
+          id: "00000000-0000-4000-8000-000000000001",
+          kinds: ["tweets"],
+          before: "2025-01-01",
+          confirmation: "BORRAR",
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+  it("does not schedule legacy cleanup jobs or allow deletion through the X adapter", async () => {
+    await activate();
+    await query(
+      "UPDATE accounts SET settings=jsonb_set(settings,'{enabled}','false')",
+    );
+    await query(`INSERT INTO cleanup_jobs(id,account_id,kinds,before_date,phase,status)
+      VALUES('00000000-0000-4000-8000-000000000001','1',ARRAY['tweets'],'2025-01-01','tweets','running')`);
+    const response = await cron(
+      new Request("http://localhost/api/cron", {
+        headers: { authorization: "Bearer cron_test" },
+      }),
+    );
+    expect(await response.json()).toEqual({ processed: 0 });
+    await runAccount("1");
+    for (const path of ["/tweets/10", "/users/1/likes/10"])
+      await expect(
+        accountXRequest("1", "token", path, { method: "DELETE" }),
+      ).rejects.toThrow("Operación de X sin presupuesto definido");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("persists sensitivity changes and rejects values outside the supported range", async () => {
+    await activate();
+    for (const threshold of [0.59, 1]) {
+      const response = await actions(
+        request("/api/actions", {
+          action: "settings",
+          settings: { ...defaultSettings, enabled: true, threshold },
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
+    expect((await getAccount("1")).settings.threshold).toBe(0.9);
+    const settings = {
+      ...defaultSettings,
+      enabled: true,
+      threshold: 0.85,
+      allowlist: ["amigo"],
+    };
+    expect(
+      (await actions(request("/api/actions", { action: "settings", settings })))
+        .status,
+    ).toBe(200);
+    expect((await getAccount("1")).settings).toEqual(settings);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("fails closed without billing configuration or subscription, including cron and activation", async () => {
     const response = await actions(
       request("/api/actions", {
@@ -597,40 +649,6 @@ describe("cost controls on real worker and API paths", () => {
     await expect(reserveUsage("2", { analyses: 1 })).rejects.toThrow(
       "activa y pagada",
     );
-  });
-  it("stops cleanup at quota without marking the remaining items failed", async () => {
-    await activate();
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    fetchMock.mockResolvedValue(
-      json({
-        data: [
-          { id: "10", text: "old", created_at: "2024-01-01T00:00:00Z" },
-          { id: "11", text: "old", created_at: "2024-01-02T00:00:00Z" },
-        ],
-      }),
-    );
-    const account = await getAccount("1");
-    await processCleanup(account, "token", Date.now() + 10000);
-    await confirmCleanup("1", id);
-    fetchMock.mockResolvedValue(json({ data: { deleted: true } }));
-    await expect(
-      processCleanup(account, "token", Date.now() + 10000),
-    ).rejects.toThrow("agotado");
-    expect(await query("SELECT status FROM cleanup_items ORDER BY id")).toEqual(
-      [{ status: "done" }, { status: "pending" }],
-    );
-    expect(
-      await query("SELECT done,failed,status FROM cleanup_jobs WHERE id=$1", [
-        id,
-      ]),
-    ).toEqual([{ done: 1, failed: 0, status: "running" }]);
-    expect((await billingSnapshot("1")).used).toEqual({
-      xRequests: 2,
-      xCredits: 4,
-      analyses: 0,
-      cleanup: 1,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it("charges posts and expanded authors, releasing only unused page credits", async () => {
     await activate();
@@ -746,11 +764,7 @@ describe("cost controls on real worker and API paths", () => {
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
-  it("allows stopping jobs and disabling BPN without a subscription", async () => {
-    const id = await createPreview("1", ["tweets"], "2025-01-01");
-    expect(
-      (await actions(request("/api/actions", { action: "cancel", id }))).status,
-    ).toBe(200);
+  it("allows disabling BPN without a subscription", async () => {
     expect(
       (
         await actions(

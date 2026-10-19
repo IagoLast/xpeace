@@ -72,13 +72,12 @@ async function syncSubscription(
     const limits = planLimits();
     await query(
       `INSERT INTO billing_usage(subscription_id,period_start,x_limit,analysis_limit,cleanup_limit,x_credit_limit)
-      VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+      VALUES($1,$2,$3,$4,1,$5) ON CONFLICT DO NOTHING`,
       [
         subscription.id,
         start,
         limits.xRequests,
         limits.analyses,
-        limits.cleanup,
         limits.xCredits,
       ],
     );

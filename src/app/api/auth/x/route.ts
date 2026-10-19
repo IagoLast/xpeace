@@ -26,7 +26,7 @@ export async function GET() {
     client_id: required("X_CLIENT_ID"),
     redirect_uri: `${appUrl()}/api/auth/callback`,
     scope:
-      "tweet.read tweet.write users.read like.read like.write block.read block.write offline.access",
+      "tweet.read tweet.write users.read block.read block.write offline.access",
     state,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",

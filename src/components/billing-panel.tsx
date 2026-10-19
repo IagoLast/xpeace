@@ -9,7 +9,6 @@ import { Card } from "./ui/card";
 const meters: { key: keyof Usage; label: string }[] = [
   { key: "xCredits", label: "Créditos de actividad en X" },
   { key: "analyses", label: "Evaluaciones" },
-  { key: "cleanup", label: "Operaciones de limpieza" },
   { key: "xRequests", label: "Consultas a X" },
 ];
 
@@ -102,8 +101,8 @@ export function BillingPanel({
       <p className="mt-3 text-sm font-medium">{status}</p>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
         {billing.active
-          ? "BPN y limpieza de historial incluidos en tu plan."
-          : "2,99 USD/mes. BPN y limpieza de historial, con los límites de uso de tu plan. Cancela cuando quieras."}
+          ? "Protección BPN incluida en tu plan."
+          : "2,99 USD/mes. Protección BPN con los límites de uso de tu plan. Cancela cuando quieras."}
       </p>
       {billing.periodEnd && (
         <p className="mt-3 text-xs text-muted-foreground">
@@ -185,9 +184,8 @@ export function BillingPanel({
           ))}
         </dl>
         <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-          BPN y las utilidades comparten el saldo de actividad en X. Cuando se
-          agota, las tareas se pausan hasta la renovación. No hay cobros por
-          exceso.
+          BPN utiliza el saldo de actividad en X. Cuando se agota, la protección
+          se pausa hasta la renovación. No hay cobros por exceso.
         </p>
       </details>
       {billing.hasCustomer && !billing.active && (

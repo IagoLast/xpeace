@@ -5,7 +5,7 @@ import { AppHeader } from "@/components/app-header";
 export const metadata: Metadata = {
   title: "Block por nabo 🫜 — xpeace",
   description:
-    "xpeace analiza respuestas y menciones en X y bloquea automáticamente los malos modos. Si has llegado desde una respuesta automática, probablemente se te haya bloqueado.",
+    "xpeace analiza respuestas y menciones en X. Una respuesta automática indica una detección; el bloqueo depende del acceso de la aplicación a X.",
 };
 
 export default function BpnPage() {
@@ -21,8 +21,9 @@ export default function BpnPage() {
             </span>
           </h1>
           <p>
-            Si has llegado aquí desde una respuesta automática, probablemente se
-            te haya bloqueado.
+            Si has llegado aquí desde una respuesta automática, BPN ha marcado
+            tu mensaje como ofensivo. La respuesta y el bloqueo son acciones
+            separadas.
           </p>
         </div>
         <section aria-labelledby="what-happened" className="space-y-3">
@@ -32,8 +33,8 @@ export default function BpnPage() {
           <p className="text-sm leading-relaxed text-muted-foreground">
             El usuario al que has respondido utiliza xpeace para filtrar los
             insultos y los malos modos en X. Cuando una respuesta o mención se
-            detecta como ofensiva, BPN se encarga de responder y bloquear
-            automáticamente.
+            supera el umbral de abuso, BPN responde y solicita el bloqueo. X
+            puede rechazar el bloqueo aunque la respuesta se haya publicado.
           </p>
         </section>
         <section
@@ -55,7 +56,7 @@ export default function BpnPage() {
               ],
               [
                 "Bloquea",
-                "Después bloquea al autor automáticamente, sin que el usuario tenga que intervenir.",
+                "El bloqueo automático requiere acceso Enterprise de X. Si no está disponible, el usuario puede bloquear desde X; la respuesta no confirma que ya lo haya hecho.",
               ],
             ].map(([title, description], index) => (
               <li key={title} className="flex gap-3">

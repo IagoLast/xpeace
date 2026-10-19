@@ -1,13 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
 import { AppHeader } from "./app-header";
 import { toast } from "sonner";
 import type { Snapshot } from "@/lib/domain";
 import { ActivityPanel } from "./interactions";
-import { CleanupPanel } from "./cleanup-panel";
 import { BpnPanel, ConnectAccount, ConnectionPanel } from "./settings-panel";
 import { BillingPanel } from "./billing-panel";
 
@@ -25,29 +22,19 @@ export function Dashboard({
   missing,
   authError,
   billingReturn,
-  section = "activity",
 }: {
   initial: Snapshot | null;
   missing: string[];
   authError?: string;
   billingReturn?: string;
-  section?: "activity" | "utilities";
 }) {
   return (
     <div className="workspace">
       <AppHeader />
       <main id="main-content" className="space-y-5">
         <div className="intro">
-          <h1>
-            {section === "utilities"
-              ? "Haz sitio para lo que viene."
-              : "Tu X, más tranquilo."}
-          </h1>
-          <p>
-            {section === "utilities"
-              ? "Utilidades para poner tu cuenta a punto."
-              : "Los malos modos se quedan fuera. Tú sigues a lo tuyo."}
-          </p>
+          <h1>Tu X, más tranquilo.</h1>
+          <p>Los malos modos se quedan fuera. Tú sigues a lo tuyo.</p>
         </div>
         {authError && (
           <div role="alert" className="notice notice-error">
@@ -57,15 +44,11 @@ export function Dashboard({
           </div>
         )}
         {initial ? (
-          <ConnectedDashboard
-            initial={initial}
-            billingReturn={billingReturn}
-            section={section}
-          />
+          <ConnectedDashboard initial={initial} billingReturn={billingReturn} />
         ) : (
           <ConnectAccount missing={missing} />
         )}
-        {!initial && section === "activity" && (
+        {!initial && (
           <section aria-labelledby="how-it-works" className="pt-3">
             <h2 id="how-it-works" className="text-sm font-semibold">
               Cómo funciona
@@ -82,7 +65,7 @@ export function Dashboard({
                 ],
                 [
                   "Bloquea si hace falta",
-                  "Si detecta una ofensa, responde y bloquea al autor automáticamente.",
+                  "Solicita el bloqueo si el acceso de la aplicación a X lo permite. Si falla, muestra el motivo.",
                 ],
               ].map(([title, description], index) => (
                 <li key={title} className="flex gap-3 sm:block">
@@ -112,11 +95,9 @@ export function Dashboard({
 function ConnectedDashboard({
   initial,
   billingReturn,
-  section,
 }: {
   initial: Snapshot;
   billingReturn?: string;
-  section: "activity" | "utilities";
 }) {
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState(false);
@@ -178,29 +159,14 @@ function ConnectedDashboard({
   useEffect(() => {
     const timer = setInterval(async () => {
       if (busyRef.current || document.hidden) return;
-      if (
-        data.billing.active &&
-        data.billing.used.xRequests < data.billing.limits.xRequests &&
-        data.jobs.some(
-          (j) =>
-            (j.status === "scanning" &&
-              data.billing.limits.xCredits - data.billing.used.xCredits >= 5) ||
-            (j.status === "running" &&
-              data.billing.limits.xCredits - data.billing.used.xCredits >= 2 &&
-              data.billing.used.cleanup < data.billing.limits.cleanup),
-        )
-      )
-        await act({ action: "work" });
-      else {
-        try {
-          await refresh();
-        } catch {
-          /* Explicit refresh displays errors; polling stays quiet. */
-        }
+      try {
+        await refresh();
+      } catch {
+        /* Explicit refresh displays errors; polling stays quiet. */
       }
     }, 8000);
     return () => clearInterval(timer);
-  }, [act, data.jobs, data.billing, refresh]);
+  }, [refresh]);
 
   const api = { data, busy, act };
 
@@ -212,68 +178,19 @@ function ConnectedDashboard({
         </div>
       )}
       <ConnectionPanel {...api} />
-      <nav className="section-nav" aria-label="Tu cuenta">
-        <Link
-          href="/"
-          aria-current={section === "activity" ? "page" : undefined}
-        >
-          BPN y actividad
-        </Link>
-        <Link
-          href="/utilities"
-          aria-current={section === "utilities" ? "page" : undefined}
-        >
-          Utilidades
-        </Link>
-      </nav>
-      {section === "activity" ? (
-        <>
-          <BpnPanel {...api} />
-          <BillingPanel
-            billing={data.billing}
-            returnState={billingReturn}
-            refresh={refresh}
-          />
-          <section
-            className="panel activity-panel"
-            id="activity"
-            aria-labelledby="activity-title"
-          >
-            <ActivityPanel {...api} />
-          </section>
-          <Link href="/utilities" className="utility-link">
-            <span>¿Quieres limpiar tus tweets y likes?</span>
-            <ArrowUpRight className="size-4" />
-          </Link>
-        </>
-      ) : (
-        <section
-          className="panel activity-panel"
-          aria-labelledby="cleanup-title"
-        >
-          <h2 id="cleanup-title" className="text-base font-semibold">
-            Limpiar historial
-          </h2>
-          <p className="mt-2 mb-6 text-sm text-muted-foreground">
-            Borra tus tweets y respuestas, o retira tus likes.
-          </p>
-          {!data.billing.active && (
-            <p className="notice mb-5">
-              Necesitas una suscripción activa.{" "}
-              <Link href="/#billing" className="underline">
-                Ver suscripción
-              </Link>
-            </p>
-          )}
-          <CleanupPanel {...api} />
-        </section>
-      )}
-
-      {busy && (
-        <span className="sr-only" role="status">
-          Procesando
-        </span>
-      )}
+      <BpnPanel {...api} />
+      <BillingPanel
+        billing={data.billing}
+        returnState={billingReturn}
+        refresh={refresh}
+      />
+      <section
+        className="panel activity-panel"
+        id="activity"
+        aria-labelledby="activity-title"
+      >
+        <ActivityPanel {...api} />
+      </section>
     </>
   );
 }

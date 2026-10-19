@@ -22,7 +22,6 @@ export async function GET(request: Request) {
     AND EXISTS(SELECT 1 FROM billing_subscriptions s WHERE s.account_id=a.id AND ${paidSubscriptionSql.replaceAll("$2", "$1")})
     AND (retry_at IS NULL OR retry_at <= now()) AND (
       (settings->>'enabled')::boolean = true OR
-      EXISTS(SELECT 1 FROM cleanup_jobs WHERE account_id=a.id AND status IN ('scanning','running')) OR
       EXISTS(SELECT 1 FROM interactions WHERE account_id=a.id AND (status='sending' OR status='replied' AND block_requested=true))
     ) ORDER BY last_work_at ASC NULLS FIRST LIMIT 1`,
     [process.env.STRIPE_PRICE_ID],

@@ -12,8 +12,8 @@ const initial: Snapshot = {
     status: "active",
     periodEnd: "2026-11-19T12:00:00Z",
     cancelAtPeriodEnd: false,
-    used: { analyses: 3, cleanup: 0, xRequests: 4, xCredits: 50 },
-    limits: { analyses: 100, cleanup: 50, xRequests: 2000, xCredits: 200 },
+    used: { analyses: 3, xRequests: 4, xCredits: 50 },
+    limits: { analyses: 100, xRequests: 2000, xCredits: 200 },
   },
   account: { id: "1", username: "cuenta_de_prueba", name: "Cuenta" },
   settings: { ...defaultSettings, enabled: true },
@@ -39,9 +39,7 @@ const initial: Snapshot = {
       },
     },
   ],
-  jobs: [],
-  preview: [],
-  stats: { analyzed: 3, flagged: 1, blocked: 1, deleted: 0 },
+  stats: { analyzed: 3, flagged: 1, blocked: 1 },
   lastSync: "2026-10-19T10:00:00Z",
   lastError: null,
 };
@@ -55,7 +53,7 @@ test.beforeAll(async () => {
         import { ThemeProvider } from './src/components/theme-provider';
         import { Toaster } from './src/components/ui/sonner';
         createRoot(document.getElementById('root')).render(
-          <ThemeProvider><Dashboard initial={window.fixture.data} missing={[]} section={window.fixture.section} /><Toaster /></ThemeProvider>
+          <ThemeProvider><Dashboard initial={window.fixture.data} missing={[]} /><Toaster /></ThemeProvider>
         );`,
       resolveDir: process.cwd(),
       loader: "tsx",
@@ -72,8 +70,8 @@ test.beforeAll(async () => {
   script = result.outputFiles[0].text;
 });
 
-async function mount(page: Page, section = "activity") {
-  const state = structuredClone(initial);
+async function mount(page: Page, seed = initial) {
+  const state = structuredClone(seed);
   await page.route("**/api/state", (route) => route.fulfill({ json: state }));
   await page.route("**/api/actions", async (route) => {
     const body = route.request().postDataJSON();
@@ -91,7 +89,7 @@ async function mount(page: Page, section = "activity") {
       contentType: "text/html",
       body: `<!doctype html><html lang="es"><head><meta name="viewport" content="width=device-width, initial-scale=1">
       ${styles.map((href) => `<link rel="stylesheet" href="${href}">`).join("")}</head><body><div id="root"></div>
-      <script>window.fixture=${JSON.stringify({ data: state, section })};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`,
+      <script>window.fixture=${JSON.stringify({ data: state })};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`,
     }),
   );
   await page.goto("/__account-test");
@@ -125,7 +123,7 @@ test("BPN saves immediately, history is visible and logout returns to sign-in", 
   ).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "Utilidades", exact: true }),
-  ).toHaveAttribute("href", "/utilities");
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Activar modo oscuro" }).click();
   await page.screenshot({
     path: "test-results/account-dark-desktop.png",
@@ -154,33 +152,126 @@ test("BPN saves immediately, history is visible and logout returns to sign-in", 
   expect(errors).toEqual([]);
 });
 
-test("utilities can select the full history or an exclusive date cutoff", async ({
+test("shows why a possible insult was not blocked and saves the threshold without rewriting history", async ({
   page,
 }) => {
-  await mount(page, "utilities");
+  const seed = structuredClone(initial);
+  seed.settings.allowlist = ["amigo"];
+  seed.interactions = [
+    {
+      ...seed.interactions[0],
+      status: "allowed",
+      reply_id: null,
+      decision: {
+        ...seed.interactions[0].decision!,
+        abuse: 0.89,
+        insult: 0.61,
+        threshold: 0.9,
+      },
+    },
+    {
+      ...seed.interactions[0],
+      id: "101",
+      status: "allowed",
+      reply_id: null,
+      decision: {
+        ...seed.interactions[0].decision!,
+        abuse: 0.54,
+        insult: 0.28,
+        label: "rude",
+      },
+    },
+  ];
+  await mount(page, seed);
+  const threshold = page.getByRole("slider", {
+    name: "Sensibilidad de BPN",
+  });
+  const save = page.getByRole("button", { name: "Guardar sensibilidad" });
+  await expect(threshold).toHaveValue("9");
+  await expect(save).toBeDisabled();
   await expect(
-    page.getByRole("heading", { name: "Limpiar historial" }),
+    page.getByText("Por debajo del umbral", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Actividad reciente" }),
-  ).toHaveCount(0);
+    page.getByText("Posible insulto", { exact: true }),
+  ).toBeVisible();
   await expect(
-    page.getByRole("radio", { name: "Todo el historial" }),
-  ).toBeChecked();
-  let request = page.waitForRequest((request) =>
-    request.url().endsWith("/api/actions"),
+    page.getByText(/Probabilidad de abuso: 89\s*%.*Umbral aplicado: 90\s*%/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Probabilidad de abuso: 54\s*%.*Umbral actual: 90\s*%/),
+  ).toBeVisible();
+  await expect(page.getByText("Sin problema", { exact: true })).toHaveCount(0);
+  await threshold.focus();
+  await threshold.press("Home");
+  await expect(threshold).toHaveAttribute(
+    "aria-valuetext",
+    "Baja; umbral de bloqueo 99 %",
   );
-  await page.getByRole("button", { name: "Preparar vista previa" }).click();
+  await threshold.press("End");
+  await expect(threshold).toHaveAttribute(
+    "aria-valuetext",
+    "Alta; umbral de bloqueo 60 %",
+  );
+  await threshold.press("Home");
+  for (let i = 0; i < 14; i++) await threshold.press("ArrowRight");
+  await expect(threshold).toHaveAttribute(
+    "aria-valuetext",
+    "Media; umbral de bloqueo 85 %",
+  );
+  const request = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/actions") &&
+      request.postDataJSON().action === "settings",
+  );
+  await save.click();
   expect((await request).postDataJSON()).toEqual({
-    action: "preview",
-    kinds: ["tweets", "likes", "replies"],
-    before: "9999-12-31",
+    action: "settings",
+    settings: { ...seed.settings, threshold: 0.85 },
   });
-  await page.getByRole("radio", { name: "Antes de una fecha" }).check();
-  await page.getByLabel("Publicados antes del").fill("2024-01-01");
-  request = page.waitForRequest((request) =>
-    request.url().endsWith("/api/actions"),
+  await expect(
+    page.getByText("Sensibilidad guardada", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(threshold).toHaveValue("14");
+  await expect(save).toBeDisabled();
+  await expect(
+    page.getByText(/Probabilidad de abuso: 89\s*%.*Umbral aplicado: 90\s*%/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Probabilidad de abuso: 54\s*%.*Umbral actual: 85\s*%/),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(threshold).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "test-results/bpn-threshold-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("keeps the saved threshold when a settings update fails", async ({
+  page,
+}) => {
+  await mount(page);
+  await page.route("**/api/actions", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "No se pudo guardar el umbral." },
+    }),
   );
-  await page.getByRole("button", { name: "Preparar vista previa" }).click();
-  expect((await request).postDataJSON().before).toBe("2024-01-01");
+  await page.getByRole("slider", { name: "Sensibilidad de BPN" }).press("End");
+  await page.getByRole("button", { name: "Guardar sensibilidad" }).click();
+  await expect(
+    page.getByText("No se pudo guardar el umbral.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Sensibilidad guardada", { exact: true }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("slider", { name: "Sensibilidad de BPN" }),
+  ).toHaveValue("9");
 });
