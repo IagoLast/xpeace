@@ -243,7 +243,14 @@ export async function createCheckout(accountId: string) {
       const session = await client.checkout.sessions.retrieve(
         row.checkout_session_id,
       );
-      if (session.status === "open" && session.url) return session.url;
+      if (session.status === "open" && session.url) {
+        if (
+          session.allow_promotion_codes &&
+          session.payment_method_collection === "if_required"
+        )
+          return session.url;
+        await client.checkout.sessions.expire(session.id);
+      }
       // A completed checkout may precede the subscription webhook. Reconcile it
       // directly rather than letting a second click buy another subscription.
       if (session.status === "complete" && idOf(session.subscription)) {
@@ -271,6 +278,8 @@ export async function createCheckout(accountId: string) {
     const session = await client.checkout.sessions.create(
       {
         mode: "subscription",
+        allow_promotion_codes: true,
+        payment_method_collection: "if_required",
         customer: customerId,
         client_reference_id: accountId,
         line_items: [{ price: price.id, quantity: 1 }],

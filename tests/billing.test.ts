@@ -80,6 +80,7 @@ function subscription(overrides = {}) {
 }
 let remote: ReturnType<typeof subscription> | null;
 let checkoutStatus: string;
+let checkoutAllowsDiscounts: boolean;
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), {
     status,
@@ -137,6 +138,7 @@ beforeEach(async () => {
   );
   remote = null;
   checkoutStatus = "open";
+  checkoutAllowsDiscounts = true;
   fetchMock
     .mockReset()
     .mockImplementation(async (url: string, init: RequestInit) => {
@@ -156,6 +158,10 @@ beforeEach(async () => {
           id: "cs_1",
           url: "https://checkout.stripe.com/c/pay/test",
           status: checkoutStatus,
+          allow_promotion_codes: checkoutAllowsDiscounts,
+          payment_method_collection: checkoutAllowsDiscounts
+            ? "if_required"
+            : "always",
           subscription: checkoutStatus === "complete" ? "sub_1" : null,
         });
       if (path === "/v1/billing_portal/sessions")
@@ -255,6 +261,8 @@ describe("subscription checkout and ownership", () => {
     expect(body.get("client_reference_id")).toBe("1");
     expect(body.get("line_items[0][price]")).toBe(price.id);
     expect(body.get("mode")).toBe("subscription");
+    expect(body.get("allow_promotion_codes")).toBe("true");
+    expect(body.get("payment_method_collection")).toBe("if_required");
     expect(await createCheckout("1")).toContain("checkout.stripe.com");
     expect(
       fetchMock.mock.calls.filter(
@@ -264,6 +272,20 @@ describe("subscription checkout and ownership", () => {
     ).toHaveLength(1);
     expect((await billingSnapshot("1")).active).toBe(false);
     expect((await billingSnapshot("2")).hasCustomer).toBe(false);
+  });
+  it("replaces an older open checkout so the customer can redeem a discount", async () => {
+    await createCheckout("1");
+    checkoutAllowsDiscounts = false;
+    expect(await createCheckout("1")).toContain("checkout.stripe.com");
+    expect(paths()).toContain(
+      "https://api.stripe.com/v1/checkout/sessions/cs_1/expire",
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith("/checkout/sessions") && init.method === "POST",
+      ),
+    ).toHaveLength(2);
   });
   it("uses the portal for an existing subscription instead of double charging", async () => {
     await activate();
@@ -362,6 +384,38 @@ describe("subscription checkout and ownership", () => {
 });
 
 describe("signed Stripe events and paid periods", () => {
+  it("grants access and normal usage limits for a fully discounted paid invoice", async () => {
+    await customer();
+    remote = subscription({
+      latest_invoice: {
+        id: "in_free",
+        status: "paid",
+        amount_due: 0,
+        amount_paid: 0,
+        total: 0,
+        payment_intent: null,
+      },
+    });
+    expect(
+      (
+        await deliver("evt_free", "checkout.session.completed", {
+          customer: "cus_1",
+          subscription: "sub_1",
+          payment_status: "no_payment_required",
+        })
+      ).status,
+    ).toBe(200);
+    expect(await billingSnapshot("1")).toMatchObject({
+      active: true,
+      limits: { analyses: 2, xCredits: 200 },
+    });
+    await reserveUsage("1", { analyses: 1 });
+    await deliver("evt_free_invoice", "invoice.paid", {
+      customer: "cus_1",
+      parent: { subscription_details: { subscription: "sub_1" } },
+    });
+    expect((await billingSnapshot("1")).used.analyses).toBe(1);
+  });
   it("retries a failed webhook without losing the event", async () => {
     await customer();
     remote = subscription();
