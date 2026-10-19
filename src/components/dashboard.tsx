@@ -65,6 +65,44 @@ export function Dashboard({
         ) : (
           <ConnectAccount missing={missing} />
         )}
+        {!initial && section === "activity" && (
+          <section aria-labelledby="how-it-works" className="pt-3">
+            <h2 id="how-it-works" className="text-sm font-semibold">
+              Cómo funciona
+            </h2>
+            <ol className="mt-4 grid gap-5 sm:grid-cols-3">
+              {[
+                [
+                  "Lee tus respuestas",
+                  "Recoge las respuestas a tus tweets y tus menciones.",
+                ],
+                [
+                  "Evalúa el contenido",
+                  "Detecta si hay un insulto o una falta de respeto.",
+                ],
+                [
+                  "Bloquea si hace falta",
+                  "Si detecta una ofensa, responde y bloquea al autor automáticamente.",
+                ],
+              ].map(([title, description], index) => (
+                <li key={title} className="flex gap-3 sm:block">
+                  <span
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-primary sm:mb-3"
+                    aria-hidden="true"
+                  >
+                    {index + 1}
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-medium">{title}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {description}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
       </main>
       <footer className="app-footer">Tu cuenta, tus decisiones.</footer>
     </div>
