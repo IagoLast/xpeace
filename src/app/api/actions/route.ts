@@ -6,7 +6,7 @@ import { query, withAccountLock } from "@/lib/server/db";
 import { runAccount } from "@/lib/server/worker";
 import { apiError } from "@/lib/server/http";
 import { requireSubscription } from "@/lib/server/billing-access";
-import { listMutedUsers } from "@/lib/server/mutes";
+import { listMutedUsers, unmuteUser } from "@/lib/server/mutes";
 import { getAccount, requireMuteScope } from "@/lib/server/x";
 
 export const maxDuration = 60;
@@ -16,6 +16,10 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("mutes"),
     cursor: z.string().min(1).max(2048).optional(),
+  }),
+  z.object({
+    action: z.literal("unmute"),
+    userId: z.string().regex(/^[0-9]{1,19}$/),
   }),
   z.object({ action: z.literal("logout") }),
   z.object({ action: z.literal("disconnect") }),
@@ -35,6 +39,10 @@ export async function POST(request: Request) {
     return await withAccountLock(account.id, async () => {
       if (input.action === "mutes")
         return Response.json(await listMutedUsers(account.id, input.cursor), {
+          headers: { "Cache-Control": "no-store" },
+        });
+      if (input.action === "unmute")
+        return Response.json(await unmuteUser(account.id, input.userId), {
           headers: { "Cache-Control": "no-store" },
         });
       if (input.action === "settings" && input.settings.enabled)

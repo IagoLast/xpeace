@@ -141,7 +141,14 @@ function ConnectedDashboard({
           window.location.assign("/");
           return {};
         }
-        await refresh();
+        try {
+          await refresh();
+        } catch {
+          // The action succeeded even if the separate dashboard read failed.
+          toast.warning(
+            "Operación completada, pero no se pudo actualizar el panel.",
+          );
+        }
         if (message) toast.success(message);
         return result;
       } catch (error) {

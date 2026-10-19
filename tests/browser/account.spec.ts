@@ -380,3 +380,150 @@ test("shows an empty mute list only after X returns a complete empty result", as
     list.getByText("No tienes usuarios silenciados en X."),
   ).toBeVisible();
 });
+
+test("unmutes a single row only after confirmation and disables duplicate actions", async ({
+  page,
+}) => {
+  await mount(page);
+  const list = page.getByRole("region", { name: "Usuarios silenciados" });
+  const requests: Record<string, unknown>[] = [];
+  let confirm!: () => void;
+  const confirmation = new Promise<void>((resolve) => {
+    confirm = resolve;
+  });
+  await page.route("**/api/actions", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.action === "unmute") {
+      await confirmation;
+      return route.fulfill({ json: { ok: true, userId: body.userId } });
+    }
+    return route.fulfill({
+      json: {
+        users: [
+          { id: "2", username: "otra_cuenta", name: "Otra cuenta" },
+          { id: "3", username: "silenciada", name: "Cuenta silenciada" },
+        ],
+        nextCursor: "next",
+      },
+    });
+  });
+  await list.getByRole("button", { name: "Ver silenciados" }).click();
+  await list
+    .getByRole("button", {
+      name: "Dejar de silenciar a @otra_cuenta",
+      exact: true,
+    })
+    .click();
+  await expect(list.getByText("Quitando silencio…")).toBeVisible();
+  await expect(list.getByText("@otra_cuenta", { exact: true })).toBeVisible();
+  await expect(
+    list.getByRole("button", {
+      name: "Dejar de silenciar a @silenciada",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(
+    list.getByRole("button", { name: "Actualizar lista" }),
+  ).toBeDisabled();
+  confirm();
+  await expect(list.getByText("@otra_cuenta", { exact: true })).toHaveCount(0);
+  await expect(list.getByText("@silenciada", { exact: true })).toBeVisible();
+  await expect(
+    list.getByText(/1 cuentas cargadas; hay más resultados/),
+  ).toBeVisible();
+  await expect(
+    list.getByRole("button", { name: "Cargar más silenciados" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText("Has dejado de silenciar a @otra_cuenta", { exact: true }),
+  ).toBeVisible();
+  expect(requests).toEqual([
+    { action: "mutes" },
+    { action: "unmute", userId: "2" },
+  ]);
+});
+
+test("keeps a failed unmute available to retry, including when the later panel refresh fails", async ({
+  page,
+}) => {
+  await mount(page);
+  const list = page.getByRole("region", { name: "Usuarios silenciados" });
+  let fail = true;
+  await page.route("**/api/actions", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "unmute")
+      return route.fulfill(
+        fail
+          ? {
+              status: 403,
+              json: { error: "X ha rechazado la operación de silenciado." },
+            }
+          : { json: { ok: true, userId: body.userId } },
+      );
+    return route.fulfill({
+      json: {
+        users: [{ id: "2", username: "otra_cuenta", name: "Otra cuenta" }],
+        nextCursor: null,
+      },
+    });
+  });
+  await list.getByRole("button", { name: "Ver silenciados" }).click();
+  const undo = list.getByRole("button", {
+    name: "Dejar de silenciar a @otra_cuenta",
+    exact: true,
+  });
+  await undo.click();
+  await expect(list.getByRole("alert")).toContainText(
+    "No se ha podido confirmar el cambio para @otra_cuenta",
+  );
+  await expect(list.getByText("@otra_cuenta", { exact: true })).toBeVisible();
+  await expect(undo).toBeEnabled();
+  await expect(
+    page.getByText("Has dejado de silenciar a @otra_cuenta", { exact: true }),
+  ).toHaveCount(0);
+  fail = false;
+  await page.route("**/api/state", (route) =>
+    route.fulfill({ status: 503, json: { error: "unavailable" } }),
+  );
+  await undo.click();
+  await expect(
+    list.getByText("No tienes usuarios silenciados en X."),
+  ).toBeVisible();
+  await expect(list.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "Operación completada, pero no se pudo actualizar el panel.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+});
+
+test("read-only mute permission allows the list but cannot unmute", async ({
+  page,
+}) => {
+  const seed = structuredClone(initial);
+  seed.muteAccess.write = false;
+  await mount(page, seed);
+  await page.route("**/api/actions", (route) =>
+    route.fulfill({
+      json: {
+        users: [{ id: "2", username: "otra_cuenta", name: "Otra cuenta" }],
+        nextCursor: null,
+      },
+    }),
+  );
+  const list = page.getByRole("region", { name: "Usuarios silenciados" });
+  await list.getByRole("button", { name: "Ver silenciados" }).click();
+  await expect(
+    list.getByRole("button", {
+      name: "Dejar de silenciar a @otra_cuenta",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(
+    list.getByText(
+      "Reconecta X en el panel de BPN para poder dejar de silenciar usuarios.",
+    ),
+  ).toBeVisible();
+});

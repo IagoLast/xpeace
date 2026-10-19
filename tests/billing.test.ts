@@ -775,14 +775,12 @@ describe("cost controls on real worker and API paths", () => {
   });
   it("lists the current account's muted users with pagination and settles the read cost", async () => {
     await activate();
-    fetchMock
-      .mockReset()
-      .mockResolvedValueOnce(
-        json({
-          data: [{ id: "5", name: "Muted", username: "muted" }],
-          meta: { next_token: "page/2+" },
-        }),
-      );
+    fetchMock.mockReset().mockResolvedValueOnce(
+      json({
+        data: [{ id: "5", name: "Muted", username: "muted" }],
+        meta: { next_token: "page/2+" },
+      }),
+    );
     const first = await actions(
       request("/api/actions", { action: "mutes", accountId: "2" }),
     );
@@ -841,14 +839,12 @@ describe("cost controls on real worker and API paths", () => {
   });
   it("does not expose partial mute lists or release their uncertain charges", async () => {
     await activate();
-    fetchMock
-      .mockReset()
-      .mockResolvedValueOnce(
-        json({
-          data: [{ id: "5", name: "Muted", username: "muted" }],
-          errors: [{ title: "partial" }],
-        }),
-      );
+    fetchMock.mockReset().mockResolvedValueOnce(
+      json({
+        data: [{ id: "5", name: "Muted", username: "muted" }],
+        errors: [{ title: "partial" }],
+      }),
+    );
     expect(
       (await actions(request("/api/actions", { action: "mutes" }))).status,
     ).toBe(502);
@@ -864,6 +860,113 @@ describe("cost controls on real worker and API paths", () => {
     await expect(
       accountXRequest("1", "token", "/users/2/muting", { method: "POST" }),
     ).rejects.toThrow("sin presupuesto");
+    for (const path of [
+      "/users/2/muting/5",
+      "/users/1/muting/5?extra=true",
+      "/users/1/muting/invalid",
+    ])
+      await expect(
+        accountXRequest("1", "token", path, { method: "DELETE" }),
+      ).rejects.toThrow("sin presupuesto");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("unmutes for the signed-in account, charges one credit and cancels only its pending retries", async () => {
+    await activate();
+    await query(`INSERT INTO interactions
+      (account_id,id,author_id,username,name,text,created_at,status,mute_requested)
+      VALUES ('1','10','5','muted','Muted','test',now(),'replied',true),
+      ('1','11','5','muted','Muted','test',now(),'muted',true),
+      ('1','12','6','other','Other','test',now(),'replied',true),
+      ('2','10','5','muted','Muted','test',now(),'replied',true)`);
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(json({ data: { muting: false } }));
+    const response = await actions(
+      request("/api/actions", {
+        action: "unmute",
+        userId: "5",
+        accountId: "2",
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, userId: "5" });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "https://api.x.com/2/users/1/muting/5",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect((await billingSnapshot("1")).used).toMatchObject({
+      xCredits: 1,
+      xRequests: 1,
+    });
+    expect((await billingSnapshot("2")).used.xCredits).toBe(0);
+    expect(
+      await query(
+        "SELECT account_id,id,status,mute_requested FROM interactions ORDER BY account_id,id",
+      ),
+    ).toEqual([
+      { account_id: "1", id: "10", status: "replied", mute_requested: false },
+      { account_id: "1", id: "11", status: "muted", mute_requested: true },
+      { account_id: "1", id: "12", status: "replied", mute_requested: true },
+      { account_id: "2", id: "10", status: "replied", mute_requested: true },
+    ]);
+  });
+  it.each([
+    { data: { muting: true } },
+    {},
+    { data: { muting: false }, errors: [{ title: "partial" }] },
+  ])(
+    "rejects an unconfirmed unmute without cancelling retries: %j",
+    async (result) => {
+      await activate();
+      await query(`INSERT INTO interactions
+      (account_id,id,author_id,username,name,text,created_at,status,mute_requested)
+      VALUES ('1','10','5','muted','Muted','test',now(),'replied',true)`);
+      fetchMock.mockReset().mockResolvedValueOnce(json(result));
+      const response = await actions(
+        request("/api/actions", { action: "unmute", userId: "5" }),
+      );
+      expect(response.status).toBe(502);
+      expect(await query("SELECT mute_requested FROM interactions")).toEqual([
+        { mute_requested: true },
+      ]);
+      expect((await billingSnapshot("1")).used.xCredits).toBe(1);
+    },
+  );
+  it("checks authentication, origin, scopes, entitlement, quota and target before unmuting", async () => {
+    const payload = { action: "unmute", userId: "5" };
+    expect(
+      (
+        await actions(
+          request("/api/actions", payload, "https://attacker.example"),
+        )
+      ).status,
+    ).toBe(403);
+    expect((await actions(request("/api/actions", payload))).status).toBe(402);
+    await activate();
+    for (const userId of [
+      "",
+      "5/../6",
+      "5?extra=true",
+      "12345678901234567890",
+      5,
+    ])
+      expect(
+        (await actions(request("/api/actions", { ...payload, userId }))).status,
+      ).toBe(400);
+    await query("UPDATE billing_usage SET x_credits=x_credit_limit");
+    expect((await actions(request("/api/actions", payload))).status).toBe(402);
+    await query("UPDATE accounts SET tokens=$1 WHERE id='1'", [
+      seal(
+        { access_token: "token", scope: "users.read mute.read" },
+        "tokens:1",
+      ),
+    ]);
+    const missingScope = await actions(request("/api/actions", payload));
+    expect(missingScope.status).toBe(403);
+    expect((await missingScope.json()).error).toContain("Vuelve a conectar X");
+    mocks.cookie = "";
+    expect((await actions(request("/api/actions", payload))).status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("allows disabling BPN without a subscription", async () => {
     expect(

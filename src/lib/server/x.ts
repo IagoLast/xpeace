@@ -259,6 +259,14 @@ export async function accountXRequest<T>(
     !url.search
   ) {
     credits = 3;
+  } else if (
+    method === "DELETE" &&
+    /^\/2\/users\/\d+\/muting\/[0-9]{1,19}$/.test(url.pathname) &&
+    url.pathname.startsWith(`/2/users/${accountId}/muting/`) &&
+    !url.search
+  ) {
+    // Mute: Delete costs $0.005 per request (one activity credit).
+    credits = 1;
   } else {
     throw new Error("Operación de X sin presupuesto definido.");
   }

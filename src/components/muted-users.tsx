@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpRight, RefreshCw, VolumeX } from "lucide-react";
+import { ArrowUpRight, RefreshCw, Volume2, VolumeX } from "lucide-react";
 import type { MutedPage } from "@/lib/domain";
 import type { DashboardApi } from "./dashboard";
 import { Button } from "./ui/button";
@@ -11,13 +11,15 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [unmutingId, setUnmutingId] = useState<string | null>(null);
+  const [unmuteFailed, setUnmuteFailed] = useState<string | null>(null);
   const available =
     data.billing.active &&
     data.billing.used.xRequests < data.billing.limits.xRequests &&
     data.billing.used.xCredits < data.billing.limits.xCredits;
 
   async function load(cursor?: string) {
-    if (busy || loading) return;
+    if (busy || loading || unmutingId) return;
     setLoading(true);
     setFailed(false);
     const result = await act({
@@ -25,6 +27,7 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
       ...(cursor ? { cursor } : {}),
     });
     if (result) {
+      setUnmuteFailed(null);
       const next = result as unknown as MutedPage;
       setPage((previous) => ({
         users:
@@ -52,6 +55,29 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
     setLoading(false);
   }
 
+  async function unmute(user: MutedPage["users"][number]) {
+    if (busy || loading || unmutingId) return;
+    setUnmutingId(user.id);
+    setUnmuteFailed(null);
+    const result = await act(
+      { action: "unmute", userId: user.id },
+      `Has dejado de silenciar a @${user.username}`,
+    );
+    if (result?.ok === true) {
+      setPage((previous) =>
+        previous
+          ? {
+              ...previous,
+              users: previous.users.filter((item) => item.id !== user.id),
+            }
+          : previous,
+      );
+    } else {
+      setUnmuteFailed(user.username);
+    }
+    setUnmutingId(null);
+  }
+
   return (
     <section
       className="panel activity-panel"
@@ -70,7 +96,7 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy || loading || !available}
+            disabled={busy || loading || !!unmutingId || !available}
             onClick={() => void load()}
           >
             <RefreshCw className={loading ? "animate-spin" : ""} />
@@ -97,6 +123,11 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
           </p>
         )
       )}
+      {data.muteAccess.read && !data.muteAccess.write && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          Reconecta X en el panel de BPN para poder dejar de silenciar usuarios.
+        </p>
+      )}
       {failed && (
         <p role="alert" className="mt-4 text-sm text-destructive">
           No se pudo actualizar la lista.{" "}
@@ -105,8 +136,18 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
             : "Puedes volver a intentarlo."}
         </p>
       )}
+      {unmuteFailed && (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          No se ha podido confirmar el cambio para @{unmuteFailed}. Actualiza la
+          lista para comprobar su estado o vuelve a intentarlo.
+        </p>
+      )}
       {page && (
-        <div className="mt-4" aria-live="polite" aria-busy={loading}>
+        <div
+          className="mt-4"
+          aria-live="polite"
+          aria-busy={loading || !!unmutingId}
+        >
           {!page.users.length && !page.nextCursor ? (
             <p className="py-4 text-sm text-muted-foreground">
               No tienes usuarios silenciados en X.
@@ -116,7 +157,7 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
               {page.users.map((user) => (
                 <li
                   key={user.id}
-                  className="flex items-center justify-between gap-3 py-3"
+                  className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">
@@ -126,15 +167,39 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
                       {user.name}
                     </p>
                   </div>
-                  <a
-                    href={`https://x.com/${user.username}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`Ver perfil de ${user.username} en X`}
-                    className="inline-flex shrink-0 items-center gap-1 text-xs text-primary"
-                  >
-                    Ver en X <ArrowUpRight className="size-3" />
-                  </a>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <a
+                      href={`https://x.com/${user.username}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Ver perfil de ${user.username} en X`}
+                      className="inline-flex items-center gap-1 text-xs text-primary"
+                    >
+                      Ver en X <ArrowUpRight className="size-3" />
+                    </a>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Dejar de silenciar a @${user.username}`}
+                      disabled={
+                        busy ||
+                        loading ||
+                        !!unmutingId ||
+                        !available ||
+                        !data.muteAccess.write
+                      }
+                      onClick={() => void unmute(user)}
+                    >
+                      {unmutingId === user.id ? (
+                        <RefreshCw className="animate-spin" />
+                      ) : (
+                        <Volume2 />
+                      )}
+                      {unmutingId === user.id
+                        ? "Quitando silencio…"
+                        : "Dejar de silenciar"}
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -151,7 +216,7 @@ export function MutedUsersPanel({ data, busy, act }: DashboardApi) {
               variant="outline"
               size="sm"
               className="mt-3"
-              disabled={busy || loading || !available}
+              disabled={busy || loading || !!unmutingId || !available}
               onClick={() => void load(page.nextCursor!)}
             >
               Cargar más silenciados
