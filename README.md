@@ -4,6 +4,8 @@ Un panel en español para limpiar el historial de X y gestionar **BPN — block 
 
 Instancia: [xpeace.vercel.app](https://xpeace.vercel.app), en el proyecto `iago-lastras-projects/xpeace`. Base de datos Neon `xpeace-db` en Frankfurt, plan Free. El cron está configurado para Hobby, una vez al día.
 
+Repositorio: [IagoLast/xpeace](https://github.com/IagoLast/xpeace). Vercel está conectado a GitHub y despliega automáticamente cada push a `main` en el dominio de producción. Las ramas adicionales generan previews; las credenciales de Stripe live están configuradas solo en producción.
+
 La aplicación de X es `xpeace-iagolast` (ID `33552492`), conectada al proyecto `xpeace`, con OAuth 2.0 confidential client y callbacks `https://xpeace.vercel.app/api/auth/callback`, `http://127.0.0.1:3000/api/auth/callback` y `http://localhost:3000/api/auth/callback`. En esta máquina se usa `127.0.0.1:3000`: otro proyecto ocupa el puerto 3000 en IPv6. X aceptó `https://iagolast.com` como web del desarrollador; rechazó `https://xpeace.vercel.app` en el campo Website URL. Las credenciales de OAuth están en las variables privadas de Vercel y en `.env.local`, excluido de Git. Las claves iniciales de aplicación están guardadas en `.vercel/x-app-keys.json`, también excluido de Git.
 
 Tras añadir saldo el 19 de octubre de 2026, se ha verificado una consulta real a X (`200`) y una evaluación real con `typesafe-ai/jev-1.14.0` a través de AI Gateway. Para uso personal, configura `ALLOWED_X_USER_IDS` con el ID de la cuenta conectada. La aplicación no compra créditos ni activa recargas automáticas.
@@ -46,12 +48,12 @@ Configurado el 19 de octubre de 2026 en Stripe **live**:
 
 - Producto `prod_VTDY1Yr79YZJzl`, precio mensual USD `price_1USH7bL0gLj4YmgjQJJ8B09n`.
 - Portal `bpc_1USH7wL0gLj4YmgjsIV6H8sz`, con baja al final del período y actualización de tarjeta.
-- Webhook `we_1USH8JL0gLj4YmgjArPHFkcj`, para `/api/billing/webhook`, **desactivado hasta desplegar esta versión** para evitar envíos a una ruta todavía no publicada.
+- Webhook `we_1USH8JL0gLj4YmgjArPHFkcj`, **habilitado** para `https://xpeace.vercel.app/api/billing/webhook`. La ruta desplegada rechaza peticiones sin firma y acepta un evento de diagnóstico firmado, consultando la base de datos sin modificar suscripciones.
 - `mcp.json` conecta con `https://mcp.stripe.com`; está excluido de Git y del paquete de despliegue. Las credenciales están en `.env.local` y en variables de producción de Vercel, nunca en el código cliente. La configuración de `mcp.json` debe cargarla el cliente MCP; durante la preparación se ha verificado la conexión JSON-RPC directamente.
 
 La migración de base de datos está aplicada. Se han comprobado Checkout y portal con la API real, sin completar ningún pago; la sesión se ha caducado y el cliente temporal se ha eliminado. Validación local: 42 tests de servidor, 7 de navegador, lint, tipos y build. La compra completa en sandbox sigue pendiente de credenciales de prueba.
 
-**Pendiente para lanzar:** alojamiento apto para uso comercial, saldo de X y AI Gateway/JEV y despliegue de esta versión (`vercel --prod`). Después del despliegue, habilita el webhook existente (`disabled=false`) y comprueba su entrega firmada. No se han contratado planes ni comprado créditos durante esta configuración.
+La versión está publicada y el saldo de X/JEV ha sido comprobado con llamadas reales. Se mantiene Vercel Hobby para las pruebas personales; antes de ofrecer el servicio comercialmente, utiliza alojamiento que permita ese uso. No se ha contratado un plan de alojamiento adicional durante esta configuración. La comprobación firmada del webhook no sustituye una compra completa en sandbox.
 
 ### Configuración inicial
 
