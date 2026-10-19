@@ -117,7 +117,7 @@ Scopes solicitados: `tweet.read tweet.write users.read like.read like.write bloc
 
 ## BPN
 
-JEV se invoca usando `experimental_decide` de AI SDK 7, con el modelo verificado `typesafe-ai/jev-1.14.0`, a través de Vercel AI Gateway. Es un modelo de decisiones: devuelve probabilidades de abuso, insulto explícito y petición de baja. No se le pide generar la respuesta; el texto enviado es **`block por nabo 🫜 ${APP_URL}/bpn`**. La página pública `/bpn` explica al destinatario que el usuario utiliza xpeace y que su respuesta se detectó como ofensiva, por lo que se le bloqueó automáticamente.
+JEV se invoca usando `experimental_decide` de AI SDK 7, con el modelo verificado `typesafe-ai/jev-1.14.0`, a través de Vercel AI Gateway. Es un modelo de decisiones: devuelve probabilidades de abuso, insulto explícito y petición de baja. No se le pide generar la respuesta; el texto enviado es **`block por nabo 🫜 ${APP_URL}/bpn`**. La página pública `/bpn` explica cómo xpeace analiza, responde y bloquea; aclara que quien llega desde una respuesta automática probablemente ha sido bloqueado.
 
 - Recoge menciones y respuestas desde la conexión inicial de la cuenta. No evalúa likes ni reposts sin texto, mensajes privados ni imágenes.
 - Por defecto BPN está desactivado. Al activarlo con una suscripción, JEV clasifica tanto respuestas directas como menciones; las que superan el umbral reciben la respuesta y el bloqueo automáticamente. El interruptor guarda inmediatamente.
