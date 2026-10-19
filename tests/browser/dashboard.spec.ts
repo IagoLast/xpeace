@@ -86,7 +86,7 @@ test("theme follows the system, persists a choice and works on the public BPN pa
     page.getByRole("heading", { name: "Block por nabo" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Quiero xpeace" }),
+    page.getByRole("link", { name: "xpeace, inicio" }),
   ).toHaveAttribute("href", "/");
   await page.getByRole("button", { name: "Activar modo claro" }).click();
   await expect(page.locator("html")).toHaveClass(/light/);

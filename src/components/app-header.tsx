@@ -5,7 +5,11 @@ import { Leaf, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "./ui/button";
 
-export function AppHeader() {
+export function AppHeader({
+  showAboutLink = true,
+}: {
+  showAboutLink?: boolean;
+}) {
   const { setTheme } = useTheme();
   return (
     <header className="app-header">
@@ -16,12 +20,14 @@ export function AppHeader() {
         </span>
       </Link>
       <div className="flex items-center gap-3">
-        <Link
-          href="/bpn"
-          className="text-xs text-muted-foreground hover:text-foreground"
-        >
-          Qué es BPN
-        </Link>
+        {showAboutLink && (
+          <Link
+            href="/bpn"
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Qué es BPN
+          </Link>
+        )}
         <Button
           variant="ghost"
           size="icon"
