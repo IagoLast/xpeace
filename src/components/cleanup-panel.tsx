@@ -16,7 +16,7 @@ import {
   AlertDialogTrigger,
 } from "./ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import type { Kind } from "@/lib/domain";
+import { ALL_HISTORY_BEFORE, type Kind } from "@/lib/domain";
 import type { DashboardApi } from "./dashboard";
 
 const kinds: { id: Kind; label: string }[] = [
@@ -39,6 +39,7 @@ export function CleanupPanel({ data, busy, act }: DashboardApi) {
     "likes",
     "replies",
   ]);
+  const [scope, setScope] = useState("all");
   const [before, setBefore] = useState("2025-01-01");
   const [confirmation, setConfirmation] = useState("");
   const [open, setOpen] = useState(false);
@@ -73,35 +74,65 @@ export function CleanupPanel({ data, busy, act }: DashboardApi) {
           ))}
         </div>
       </div>
-      <div>
-        <Label htmlFor="before">Publicados antes del</Label>
-        <Input
-          type="date"
-          id="before"
-          value={before}
-          disabled={active || busy}
-          onChange={(e) => setBefore(e.target.value)}
-          className="mt-2 max-w-xs"
-        />
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          También para likes: cuenta la fecha del post, no la del me gusta. El
-          día elegido queda fuera (UTC).
-        </p>
-      </div>
+      <fieldset disabled={active || busy} className="space-y-3">
+        <legend className="text-sm font-medium">Qué período</legend>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="radio"
+            name="cleanup-scope"
+            value="all"
+            checked={scope === "all"}
+            onChange={() => setScope("all")}
+            className="accent-primary"
+          />
+          Todo el historial
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="radio"
+            name="cleanup-scope"
+            value="before"
+            checked={scope === "before"}
+            onChange={() => setScope("before")}
+            className="accent-primary"
+          />
+          Antes de una fecha
+        </label>
+        {scope === "before" && (
+          <div>
+            <Label htmlFor="before">Publicados antes del</Label>
+            <Input
+              type="date"
+              id="before"
+              value={before}
+              onChange={(e) => setBefore(e.target.value)}
+              className="mt-2 max-w-xs"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              También para likes: cuenta la fecha del post. El día elegido queda
+              fuera (UTC).
+            </p>
+          </div>
+        )}
+      </fieldset>
       <div className="flex flex-wrap items-center gap-3">
         <Button
           disabled={
             busy ||
             active ||
             !selected.length ||
-            !before ||
+            (scope === "before" && !before) ||
             !data.billing.active ||
             data.billing.used.xRequests >= data.billing.limits.xRequests ||
             data.billing.limits.xCredits - data.billing.used.xCredits < 5
           }
           onClick={() =>
             void act(
-              { action: "preview", kinds: selected, before },
+              {
+                action: "preview",
+                kinds: selected,
+                before: scope === "all" ? ALL_HISTORY_BEFORE : before,
+              },
               "Vista previa preparada",
             )
           }

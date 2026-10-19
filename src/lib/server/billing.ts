@@ -120,9 +120,21 @@ async function syncCustomer(accountId: string, customerId: string) {
   return subscriptions;
 }
 
-async function portal(customer: string) {
+async function portal(customer: string, subscription?: string) {
   const session = await stripe().billingPortal.sessions.create({
     customer,
+    ...(subscription
+      ? {
+          flow_data: {
+            type: "subscription_cancel" as const,
+            subscription_cancel: { subscription },
+            after_completion: {
+              type: "redirect" as const,
+              redirect: { return_url: `${appUrl()}/?billing=return` },
+            },
+          },
+        }
+      : {}),
     return_url: `${appUrl()}/?billing=return`,
     ...(process.env.STRIPE_PORTAL_CONFIGURATION_ID
       ? { configuration: process.env.STRIPE_PORTAL_CONFIGURATION_ID }
@@ -140,6 +152,30 @@ export async function createPortal(accountId: string) {
   if (!row?.customer_id)
     throw new HttpError(409, "Esta cuenta todavía no tiene una suscripción.");
   return portal(row.customer_id);
+}
+
+export async function createCancellationPortal(accountId: string) {
+  requireConfiguration();
+  return withAccountLock(`billing:${accountId}`, async () => {
+    const [row] = await query<CustomerRow>(
+      "SELECT * FROM billing_accounts WHERE account_id=$1",
+      [accountId],
+    );
+    if (!row?.customer_id)
+      throw new HttpError(409, "No tienes una suscripción que cancelar.");
+    const subscriptions = await syncCustomer(accountId, row.customer_id);
+    const subscription = subscriptions.find(
+      (s) =>
+        !["canceled", "incomplete_expired"].includes(s.status) &&
+        (s.metadata.xpeace_account_id === accountId ||
+          s.items.data.some(
+            (item) => item.price.id === required("STRIPE_PRICE_ID"),
+          )),
+    );
+    if (!subscription)
+      throw new HttpError(409, "No tienes una suscripción que cancelar.");
+    return portal(row.customer_id, subscription.id);
+  });
 }
 
 export async function refreshBilling(accountId: string) {

@@ -180,3 +180,28 @@ test("billing remains unavailable until the server is configured", async ({
   ).toBeDisabled();
   await expect(page.getByText("Suscripciones próximamente")).toBeVisible();
 });
+
+test("an active subscriber can go directly to cancellation", async ({
+  page,
+}) => {
+  await page.route("**/api/billing/cancel", (route) => {
+    expect(route.request().method()).toBe("POST");
+    return route.fulfill({
+      json: { url: "https://billing.stripe.com/p/session/cancel" },
+    });
+  });
+  await page.route("https://billing.stripe.com/**", (route) =>
+    route.fulfill({ body: "Cancelar suscripción" }),
+  );
+  await mount(page, {
+    ...base,
+    active: true,
+    hasCustomer: true,
+    status: "active",
+  });
+  await expect(page.getByRole("progressbar").first()).toBeHidden();
+  await page
+    .getByRole("button", { name: "Cancelar suscripción", exact: true })
+    .click();
+  await expect(page).toHaveURL("https://billing.stripe.com/p/session/cancel");
+});

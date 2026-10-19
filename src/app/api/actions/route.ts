@@ -4,12 +4,9 @@ import { cleanupSchema, settingsSchema } from "@/lib/domain";
 import { authorize, HttpError } from "@/lib/server/auth";
 import { query, withAccountLock } from "@/lib/server/db";
 import { confirmCleanup, createPreview } from "@/lib/server/cleanup";
-import { evaluate } from "@/lib/server/jev";
-import { replyAndBlock } from "@/lib/server/moderation";
 import { runAccount } from "@/lib/server/worker";
-import { accessToken, getAccount } from "@/lib/server/x";
 import { apiError } from "@/lib/server/http";
-import { requireSubscription, reserveUsage } from "@/lib/server/billing-access";
+import { requireSubscription } from "@/lib/server/billing-access";
 
 export const maxDuration = 60;
 const actionSchema = z.discriminatedUnion("action", [
@@ -23,15 +20,7 @@ const actionSchema = z.discriminatedUnion("action", [
     confirmation: z.literal("BORRAR"),
   }),
   z.object({ action: z.literal("cancel"), id: z.uuid() }),
-  z.object({
-    action: z.literal("moderate"),
-    id: z.string().regex(/^\d{1,25}$/),
-    choice: z.enum(["apply", "ignore"]),
-  }),
-  z.object({
-    action: z.literal("test"),
-    text: z.string().trim().min(1).max(4000),
-  }),
+  z.object({ action: z.literal("logout") }),
   z.object({ action: z.literal("disconnect") }),
 ]);
 
@@ -54,12 +43,10 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
     return await withAccountLock(account.id, async () => {
-      const fresh = await getAccount(account.id);
       if (
         input.action === "preview" ||
         input.action === "confirm" ||
-        (input.action === "settings" && input.settings.enabled) ||
-        (input.action === "moderate" && input.choice === "apply")
+        (input.action === "settings" && input.settings.enabled)
       )
         await requireSubscription(account.id);
       if (input.action === "settings") {
@@ -75,16 +62,12 @@ export async function POST(request: Request) {
         );
       } else if (input.action === "confirm") {
         await confirmCleanup(account.id, input.id);
-      } else if (input.action === "moderate") {
-        if (input.choice === "ignore")
-          await query(
-            "UPDATE interactions SET status='ignored' WHERE account_id=$1 AND id=$2 AND status IN ('review','pending')",
-            [account.id, input.id],
-          );
-        else await replyAndBlock(fresh, await accessToken(fresh), input.id);
-      } else if (input.action === "test") {
-        await reserveUsage(account.id, { analyses: 1 });
-        return Response.json({ decision: await evaluate(input.text) });
+      } else if (input.action === "logout") {
+        await query(
+          "UPDATE accounts SET session_version=session_version+1 WHERE id=$1",
+          [account.id],
+        );
+        (await cookies()).delete("xpeace_session");
       } else if (input.action === "disconnect") {
         await query(
           "UPDATE accounts SET tokens='',settings=jsonb_set(settings,'{enabled}','false'),session_version=session_version+1 WHERE id=$1",

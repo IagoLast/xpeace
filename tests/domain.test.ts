@@ -19,24 +19,17 @@ const abuse: Decision = {
 const automatic = {
   ...defaultSettings,
   enabled: true,
-  mode: "automatic" as const,
 };
 describe("BPN routing", () => {
-  it("sends only when enabled, above threshold and a direct reply", () => {
-    expect(routeDecision(abuse, automatic, true)).toBe("send");
-    expect(routeDecision(abuse, automatic, false)).toBe("review");
-    expect(routeDecision(abuse, { ...automatic, enabled: false }, true)).toBe(
-      "review",
-    );
-    expect(routeDecision(abuse, { ...automatic, mode: "review" }, true)).toBe(
-      "review",
+  it("sends abusive interactions automatically only while enabled", () => {
+    expect(routeDecision(abuse, automatic)).toBe("send");
+    expect(routeDecision(abuse, { ...automatic, enabled: false })).toBe(
+      "pending",
     );
   });
   it("keeps legitimate disagreement and opt-outs out of the reply flow", () => {
-    expect(routeDecision({ ...abuse, abuse: 0.05 }, automatic, true)).toBe(
-      "allowed",
-    );
-    expect(routeDecision({ ...abuse, optOut: 0.95 }, automatic, true)).toBe(
+    expect(routeDecision({ ...abuse, abuse: 0.05 }, automatic)).toBe("allowed");
+    expect(routeDecision({ ...abuse, optOut: 0.95 }, automatic)).toBe(
       "ignored",
     );
   });

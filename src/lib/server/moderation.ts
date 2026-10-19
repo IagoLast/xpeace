@@ -1,16 +1,19 @@
 import "server-only";
 import {
   BPN_REPLY,
+  BPN_PAGE,
+  BPN_REPLY_CREDITS,
   isOptOut,
   routeDecision,
   type Decision,
   type Interaction,
 } from "../domain";
+import { appUrl } from "./config";
 import { query } from "./db";
 import { evaluate } from "./jev";
 import { HttpError } from "./auth";
 import { type Account, type Timeline, accountXRequest, xRequest } from "./x";
-import { reserveUsage } from "./billing-access";
+import { BillingError, billingSnapshot, reserveUsage } from "./billing-access";
 
 export async function ingestMentions(account: Account, token: string) {
   const params = new URLSearchParams({
@@ -103,7 +106,7 @@ export async function replyAndBlock(
     "SELECT * FROM interactions WHERE account_id=$1 AND id=$2",
     [account.id, id],
   );
-  if (!item || item.status !== "review")
+  if (!item || !["pending", "review"].includes(item.status))
     throw new HttpError(409, "Esta interacción ya se ha procesado.");
   if (await excluded(account, item))
     throw new HttpError(409, "Esta cuenta está excluida de BPN.");
@@ -122,26 +125,39 @@ export async function replyAndBlock(
   );
   if (recent.length) {
     await query(
-      "UPDATE interactions SET status='ignored' WHERE account_id=$1 AND id=$2 AND status='review'",
+      "UPDATE interactions SET status='ignored' WHERE account_id=$1 AND id=$2 AND status IN ('pending','review')",
       [account.id, id],
     );
     return;
   }
+  // Check the whole reply + block before spending on the target lookup. Each
+  // request still reserves its own quota atomically at the external boundary.
+  const billing = await billingSnapshot(account.id);
+  if (
+    billing.active &&
+    (billing.limits.xCredits - billing.used.xCredits <
+      1 + BPN_REPLY_CREDITS + 3 ||
+      billing.limits.xRequests - billing.used.xRequests < 3)
+  )
+    throw new BillingError(
+      "Has agotado el cupo disponible para responder y bloquear. Se reanudará en la renovación.",
+      billing.periodEnd ? new Date(billing.periodEnd) : undefined,
+    );
   // Verify the target still exists before publishing a reply.
   await accountXRequest(account.id, token, `/tweets/${id}`);
-  // A denied reservation must leave the interaction reviewable, never ambiguous.
-  await reserveUsage(account.id, { xRequests: 1, xCredits: 3 });
+  // A denied reservation must leave the interaction queued, never ambiguous.
+  await reserveUsage(account.id, { xRequests: 1, xCredits: BPN_REPLY_CREDITS });
   // Durable claim precedes the external side effect. An interrupted/ambiguous send is NEVER retried.
   const claimed = await query(
-    "UPDATE interactions SET status='sending',attempted_at=now(),block_requested=$3 WHERE account_id=$1 AND id=$2 AND status='review' RETURNING id",
-    [account.id, id, account.settings.block],
+    "UPDATE interactions SET status='sending',attempted_at=now(),block_requested=true WHERE account_id=$1 AND id=$2 AND status IN ('pending','review') RETURNING id",
+    [account.id, id],
   );
   if (!claimed.length) return;
   try {
     const result = await xRequest<{ data: { id: string } }>(token, "/tweets", {
       method: "POST",
       body: JSON.stringify({
-        text: BPN_REPLY,
+        text: `${BPN_REPLY} ${appUrl()}${BPN_PAGE}`,
         reply: { in_reply_to_tweet_id: id },
       }),
     });
@@ -165,7 +181,7 @@ export async function replyAndBlock(
       "No se ha podido confirmar el envío. Comprueba X; no se reenviará automáticamente.",
     );
   }
-  if (account.settings.block) await blockAuthor(account.id, token, item);
+  await blockAuthor(account.id, token, item);
 }
 
 async function blockAuthor(
@@ -226,8 +242,9 @@ export async function processModeration(
   token: string,
   deadline: number,
 ) {
+  if (!account.settings.enabled) return;
   const items = await query<Interaction>(
-    "SELECT * FROM interactions WHERE account_id=$1 AND status='pending' ORDER BY created_at,id LIMIT 5",
+    "SELECT * FROM interactions WHERE account_id=$1 AND status IN ('pending','review') ORDER BY created_at,id LIMIT 5",
     [account.id],
   );
   for (const item of items) {
@@ -245,9 +262,12 @@ export async function processModeration(
       continue;
     }
     let decision: Decision;
-    await reserveUsage(account.id, { analyses: 1 });
+    if (!item.decision) await reserveUsage(account.id, { analyses: 1 });
     try {
-      decision = await evaluate(item.text);
+      if (item.decision) decision = item.decision;
+      else {
+        decision = await evaluate(item.text);
+      }
     } catch {
       // Provider failure leaves the item pending: no guessed classification and no action.
       throw new HttpError(
@@ -255,22 +275,24 @@ export async function processModeration(
         "JEV no ha podido evaluar la interacción. Se mantiene pendiente, sin responder ni bloquear.",
       );
     }
-    const route = routeDecision(decision, account.settings, item.direct_reply);
+    const route = routeDecision(decision, account.settings);
     if (decision.optOut >= 0.5)
       await query(
         "INSERT INTO opt_outs(account_id,author_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
         [account.id, item.author_id],
       );
-    if (route === "send" && Date.now() >= deadline) return;
     await query(
       "UPDATE interactions SET decision=$3::jsonb,status=$4 WHERE account_id=$1 AND id=$2",
       [
         account.id,
         item.id,
         JSON.stringify(decision),
-        route === "send" ? "review" : route,
+        route === "send" ? "pending" : route,
       ],
     );
-    if (route === "send") await replyAndBlock(account, token, item.id);
+    if (route === "send") {
+      if (Date.now() >= deadline) return;
+      await replyAndBlock(account, token, item.id);
+    }
   }
 }

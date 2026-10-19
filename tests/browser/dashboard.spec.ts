@@ -5,10 +5,10 @@ test("disconnected users can only connect X and receive no sample account data",
 }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Empieza por conectar tu cuenta" }),
+    page.getByRole("heading", { name: "Tu tranquilidad empieza aquí" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Conectar X", exact: true }),
+    page.getByRole("link", { name: "Iniciar sesión con X", exact: true }),
   ).toHaveAttribute("href", "/api/auth/x");
   await expect(page.getByRole("switch")).toHaveCount(0);
   await expect(
@@ -29,7 +29,7 @@ test("mobile connection and authorization errors render without overflow or hydr
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await expect(
-    page.getByRole("link", { name: "Conectar X", exact: true }),
+    page.getByRole("link", { name: "Iniciar sesión con X", exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
@@ -43,7 +43,7 @@ test("mobile connection and authorization errors render without overflow or hydr
     "Esta cuenta no está autorizada para este despliegue.",
   );
   await expect(
-    page.getByRole("link", { name: "Conectar X", exact: true }),
+    page.getByRole("link", { name: "Iniciar sesión con X", exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
@@ -66,4 +66,37 @@ test("unauthenticated writes, JEV calls and cron runs are rejected", async ({
   expect(
     (await request.post("/api/billing/webhook", { data: {} })).status(),
   ).toBe(400);
+});
+
+test("theme follows the system, persists a choice and works on the public BPN page", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveClass(/light/);
+  await page.getByRole("button", { name: "Activar modo oscuro" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.reload();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.getByRole("link", { name: "Qué es BPN" }).click();
+  await expect(page).toHaveURL(/\/bpn$/);
+  await expect(
+    page.getByRole("heading", { name: "Block por nabo" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Quiero xpeace" }),
+  ).toHaveAttribute("href", "/");
+  await page.getByRole("button", { name: "Activar modo claro" }).click();
+  await expect(page.locator("html")).toHaveClass(/light/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "test-results/bpn-light-mobile.png",
+    fullPage: true,
+  });
+  expect(errors).toEqual([]);
 });

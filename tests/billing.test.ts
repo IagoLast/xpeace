@@ -36,6 +36,7 @@ import {
 import { replyAndBlock } from "@/lib/server/moderation";
 import { POST as webhook } from "@/app/api/billing/webhook/route";
 import { POST as checkout } from "@/app/api/billing/checkout/route";
+import { POST as cancelSubscription } from "@/app/api/billing/cancel/route";
 import { POST as portal } from "@/app/api/billing/portal/route";
 import { POST as actions } from "@/app/api/actions/route";
 import { GET as cron } from "@/app/api/cron/route";
@@ -279,6 +280,69 @@ describe("subscription checkout and ownership", () => {
     )!;
     expect(new URLSearchParams(call[1].body).get("customer")).toBe("cus_1");
   });
+  it("opens cancellation only for the authenticated account's subscription", async () => {
+    await activate();
+    const response = await cancelSubscription(
+      request("/api/billing/cancel", {
+        customer: "cus_other",
+        subscription: "sub_other",
+      }),
+    );
+    expect(response.status).toBe(200);
+    const call = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("billing_portal"),
+    )!;
+    const body = new URLSearchParams(call[1].body);
+    expect(body.get("customer")).toBe("cus_1");
+    expect(body.get("flow_data[type]")).toBe("subscription_cancel");
+    expect(body.get("flow_data[subscription_cancel][subscription]")).toBe(
+      "sub_1",
+    );
+    expect(body.get("flow_data[after_completion][redirect][return_url]")).toBe(
+      "http://localhost:3000/?billing=return",
+    );
+  });
+  it("rejects cancellation without a session or from another origin", async () => {
+    expect(
+      (
+        await cancelSubscription(
+          request("/api/billing/cancel", undefined, "https://attacker.example"),
+        )
+      ).status,
+    ).toBe(403);
+    mocks.cookie = "";
+    expect(
+      (await cancelSubscription(request("/api/billing/cancel"))).status,
+    ).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("ends the session while keeping BPN, tokens, subscription and cleanup running", async () => {
+    await activate();
+    const before = await getAccount("1");
+    const job = await createPreview("1", ["tweets"], "2025-01-01");
+    expect(
+      (await actions(request("/api/actions", { action: "logout" }))).status,
+    ).toBe(200);
+    const after = await getAccount("1");
+    expect(after.tokens).toBe(before.tokens);
+    expect(after.settings.enabled).toBe(true);
+    expect(after.session_version).toBe(before.session_version + 1);
+    expect((await billingSnapshot("1")).active).toBe(true);
+    expect(
+      await query("SELECT status FROM cleanup_jobs WHERE id=$1", [job]),
+    ).toEqual([{ status: "scanning" }]);
+    expect(
+      (
+        await actions(
+          request("/api/actions", {
+            action: "settings",
+            settings: defaultSettings,
+          }),
+        )
+      ).status,
+    ).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("rejects unauthenticated and cross-origin billing requests before contacting Stripe", async () => {
     mocks.cookie = "";
     expect((await checkout(request("/api/billing/checkout"))).status).toBe(401);
@@ -441,9 +505,12 @@ describe("signed Stripe events and paid periods", () => {
 });
 
 describe("cost controls on real worker and API paths", () => {
-  it("fails closed without billing configuration or subscription, including cron and direct JEV calls", async () => {
+  it("fails closed without billing configuration or subscription, including cron and activation", async () => {
     const response = await actions(
-      request("/api/actions", { action: "test", text: "hola" }),
+      request("/api/actions", {
+        action: "settings",
+        settings: { ...defaultSettings, enabled: true },
+      }),
     );
     expect(response.status).toBe(402);
     await expect(runAccount("1", true)).rejects.toMatchObject({ status: 402 });
@@ -609,7 +676,21 @@ describe("cost controls on real worker and API paths", () => {
     expect(await query("SELECT status,attempted_at FROM interactions")).toEqual(
       [{ status: "review", attempted_at: null }],
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("keeps a reply queued without spending credits when the URL reply and block do not fit", async () => {
+    await activate();
+    await reserveUsage("1", { xCredits: 160 });
+    await query(`INSERT INTO interactions(account_id,id,author_id,username,name,text,created_at,status)
+      VALUES('1','100','2','other','Other','hello',now(),'pending')`);
+    await expect(
+      replyAndBlock(await getAccount("1"), "token", "100"),
+    ).rejects.toThrow("agotado");
+    expect((await billingSnapshot("1")).used.xCredits).toBe(160);
+    expect(await query("SELECT status,attempted_at FROM interactions")).toEqual(
+      [{ status: "pending", attempted_at: null }],
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("allows stopping jobs and disabling BPN without a subscription", async () => {
     const id = await createPreview("1", ["tweets"], "2025-01-01");

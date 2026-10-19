@@ -49,8 +49,6 @@ const decision = {
 const settings = {
   ...defaultSettings,
   enabled: true,
-  mode: "automatic",
-  block: true,
 };
 beforeAll(async () => {
   db = new PGlite();
@@ -116,7 +114,7 @@ describe("persistent moderation", () => {
       reply_id: "999",
     });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
-      text: "block por nabo",
+      text: "block por nabo 🫜 http://localhost:3000/bpn",
       reply: { in_reply_to_tweet_id: "100" },
     });
     expect(fetchMock.mock.calls[2][0]).toContain("/users/1/blocking");
@@ -187,16 +185,54 @@ describe("persistent moderation", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mocks.evaluate).not.toHaveBeenCalled();
   });
-  it("does not auto-reply to a mention which is not a direct reply", async () => {
+  it.each([true, false])(
+    "automatically replies and blocks with direct_reply=%s",
+    async (directReply) => {
+      await interaction("pending");
+      await query("UPDATE interactions SET direct_reply=$1", [directReply]);
+      fetchMock
+        .mockResolvedValueOnce(json({ data: { id: "100" } }))
+        .mockResolvedValueOnce(json({ data: { id: "999" } }))
+        .mockResolvedValueOnce(json({ data: { blocking: true } }));
+      await processModeration(
+        await getAccount("1"),
+        "token",
+        Date.now() + 10_000,
+      );
+      expect((await current()).status).toBe("blocked");
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body).text).toBe(
+        "block por nabo 🫜 http://localhost:3000/bpn",
+      );
+      expect(
+        (await snapshot(await getAccount("1"))).billing.used.xCredits,
+      ).toBe(44);
+    },
+  );
+  it("does not evaluate or send while BPN is paused", async () => {
     await interaction("pending");
-    await query("UPDATE interactions SET direct_reply=false");
+    const account = await getAccount("1");
+    account.settings.enabled = false;
+    await processModeration(account, "token", Date.now() + 10_000);
+    expect((await current()).status).toBe("pending");
+    expect(mocks.evaluate).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("resumes queued decisions without charging for another evaluation", async () => {
+    await interaction("pending");
+    await query("UPDATE interactions SET decision=$1::jsonb", [
+      JSON.stringify(decision),
+    ]);
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { id: "100" } }))
+      .mockResolvedValueOnce(json({ data: { id: "999" } }))
+      .mockResolvedValueOnce(json({ data: { blocking: true } }));
     await processModeration(
       await getAccount("1"),
       "token",
       Date.now() + 10_000,
     );
-    expect((await current()).status).toBe("review");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await current()).status).toBe("blocked");
+    expect(mocks.evaluate).not.toHaveBeenCalled();
   });
   it("excludes trusted accounts case-insensitively", async () => {
     await interaction("pending");
@@ -360,12 +396,16 @@ describe("external boundaries", () => {
     );
     await reserveUsage("1", { cleanup: 500 });
     await interaction("pending");
-    await query(
-      "UPDATE accounts SET tokens=$1,last_sync=now(),settings=jsonb_set(settings,'{mode}','\"review\"') WHERE id='1'",
-      [seal({ access_token: "test", expires_in: 3600 }, "tokens:1")],
-    );
+    await query("UPDATE accounts SET tokens=$1,last_sync=now() WHERE id='1'", [
+      seal({ access_token: "test", expires_in: 3600 }, "tokens:1"),
+    ]);
+    mocks.evaluate.mockResolvedValueOnce({
+      ...decision,
+      abuse: 0.01,
+      label: "healthy",
+    });
     await runAccount("1");
-    expect((await current()).status).toBe("review");
+    expect((await current()).status).toBe("allowed");
     expect(await query("SELECT status FROM cleanup_items")).toEqual([
       { status: "pending" },
     ]);

@@ -1,20 +1,20 @@
 import { z } from "zod";
 
-export const BPN_REPLY = "block por nabo";
+export const BPN_REPLY = "block por nabo 🫜";
+export const BPN_PAGE = "/bpn";
+// A post with a URL costs 40 of our 0.005 USD activity credits.
+export const BPN_REPLY_CREDITS = 40;
+export const ALL_HISTORY_BEFORE = "9999-12-31";
 export const MODEL = "typesafe-ai/jev-1.14.0";
 export const settingsSchema = z.object({
   enabled: z.boolean(),
-  mode: z.enum(["review", "automatic"]),
   threshold: z.number().min(0.6).max(0.99),
-  block: z.boolean(),
   allowlist: z.array(z.string().regex(/^[A-Za-z0-9_]{1,15}$/)).max(100),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaultSettings: Settings = {
   enabled: false,
-  mode: "review",
   threshold: 0.9,
-  block: true,
   allowlist: [],
 };
 export type Kind = "tweets" | "replies" | "likes";
@@ -103,16 +103,10 @@ export type Snapshot = {
   lastError: string | null;
 };
 
-export function routeDecision(
-  decision: Decision,
-  settings: Settings,
-  directReply: boolean,
-) {
+export function routeDecision(decision: Decision, settings: Settings) {
   if (decision.optOut >= 0.5) return "ignored" as const;
   if (decision.abuse < settings.threshold) return "allowed" as const;
-  return settings.enabled && settings.mode === "automatic" && directReply
-    ? ("send" as const)
-    : ("review" as const);
+  return settings.enabled ? ("send" as const) : ("pending" as const);
 }
 
 export function matchesCleanup(

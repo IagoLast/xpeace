@@ -315,27 +315,6 @@ button:not(:disabled),
 .disclosure-body {
   padding: 0 26px 24px;
 }
-.advanced > summary {
-  padding: 18px 0;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.save-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
-}
-.review-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--primary);
-  flex-shrink: 0;
-}
 .interaction-row {
   padding-block: 16px;
   overflow-wrap: anywhere;
@@ -380,9 +359,6 @@ button:not(:disabled),
   .disclosure > summary {
     padding: 20px;
   }
-  .advanced > summary {
-    padding: 18px 0;
-  }
   .disclosure-body {
     padding-inline: 20px;
   }
@@ -390,5 +366,69 @@ button:not(:disabled),
 @media (prefers-reduced-motion: reduce) {
   .disclosure-chevron {
     transition: none;
+  }
+}
+
+:root:not(.dark) {
+  color-scheme: light;
+  --background: #f6f8f5;
+  --foreground: #202c24;
+  --card: #ffffff;
+  --card-foreground: #202c24;
+  --popover: #ffffff;
+  --popover-foreground: #202c24;
+  --primary: #2d6840;
+  --primary-foreground: #ffffff;
+  --secondary: #e9efe9;
+  --secondary-foreground: #304535;
+  --muted: #e9efe9;
+  --muted-foreground: #5d6c61;
+  --accent: #e5efe6;
+  --accent-foreground: #243e2c;
+  --border: #dce4dc;
+  --input: #c9d6cb;
+  --ring: #3a7950;
+  --destructive: #b63b35;
+  --radius: 0.75rem;
+}
+.activity-panel {
+  padding: 26px;
+}
+.reply-preview {
+  padding: 16px 18px;
+  border-left: 2px solid var(--primary);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+.section-nav {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.section-nav a {
+  padding-block: 10px 14px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  border-bottom: 2px solid transparent;
+}
+.section-nav a[aria-current="page"] {
+  color: var(--foreground);
+  border-color: var(--primary);
+}
+.utility-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.utility-link:hover {
+  color: var(--foreground);
+}
+@media (max-width: 480px) {
+  .activity-panel {
+    padding: 20px;
   }
 }

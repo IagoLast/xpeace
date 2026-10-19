@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ChevronDown, Leaf } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
+import { AppHeader } from "./app-header";
 import { toast } from "sonner";
-import type { Decision, Snapshot } from "@/lib/domain";
+import type { Snapshot } from "@/lib/domain";
 import { ActivityPanel } from "./interactions";
 import { CleanupPanel } from "./cleanup-panel";
 import { BpnPanel, ConnectAccount, ConnectionPanel } from "./settings-panel";
@@ -18,36 +18,36 @@ export type DashboardApi = {
   act: (
     payload: Action,
     message?: string,
-  ) => Promise<{ decision?: Decision } | null>;
+  ) => Promise<Record<string, unknown> | null>;
 };
 export function Dashboard({
   initial,
   missing,
   authError,
   billingReturn,
+  section = "activity",
 }: {
   initial: Snapshot | null;
   missing: string[];
   authError?: string;
   billingReturn?: string;
+  section?: "activity" | "utilities";
 }) {
   return (
     <div className="workspace">
-      <header className="app-header">
-        <Link href="/" className="brand" aria-label="xpeace, inicio">
-          <Leaf className="size-5 text-primary" strokeWidth={1.8} />
-          <span>
-            xpeace<span className="text-primary">.</span>
-          </span>
-        </Link>
-        <span className="text-xs text-muted-foreground">
-          Menos ruido. Más paz.
-        </span>
-      </header>
+      <AppHeader />
       <main id="main-content" className="space-y-5">
         <div className="intro">
-          <h1>Tu X, más tranquilo.</h1>
-          <p>Conecta tu cuenta. Pon tus límites. Y listo.</p>
+          <h1>
+            {section === "utilities"
+              ? "Haz sitio para lo que viene."
+              : "Tu X, más tranquilo."}
+          </h1>
+          <p>
+            {section === "utilities"
+              ? "Utilidades para poner tu cuenta a punto."
+              : "Los malos modos se quedan fuera. Tú sigues a lo tuyo."}
+          </p>
         </div>
         {authError && (
           <div role="alert" className="notice notice-error">
@@ -57,7 +57,11 @@ export function Dashboard({
           </div>
         )}
         {initial ? (
-          <ConnectedDashboard initial={initial} billingReturn={billingReturn} />
+          <ConnectedDashboard
+            initial={initial}
+            billingReturn={billingReturn}
+            section={section}
+          />
         ) : (
           <ConnectAccount missing={missing} />
         )}
@@ -70,11 +74,12 @@ export function Dashboard({
 function ConnectedDashboard({
   initial,
   billingReturn,
+  section,
 }: {
   initial: Snapshot;
   billingReturn?: string;
+  section: "activity" | "utilities";
 }) {
-  const router = useRouter();
   const [data, setData] = useState(initial);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -110,9 +115,10 @@ function ConnectedDashboard({
           }
           throw new Error(result.error ?? "No se pudo completar la operación.");
         }
-        if (payload.action === "disconnect") {
-          router.refresh();
-          router.push("/");
+        if (payload.action === "logout") {
+          // Discard all account data and the router cache after invalidating the session.
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+          window.location.assign("/");
           return {};
         }
         await refresh();
@@ -128,7 +134,7 @@ function ConnectedDashboard({
         setBusy(false);
       }
     },
-    [refresh, router],
+    [refresh],
   );
 
   useEffect(() => {
@@ -159,19 +165,6 @@ function ConnectedDashboard({
   }, [act, data.jobs, data.billing, refresh]);
 
   const api = { data, busy, act };
-  const reviews = data.interactions.filter((i) => i.status === "review").length;
-  const errors = data.interactions.filter((i) => i.error).length;
-  const job = data.jobs[0];
-  const cleanupLabel =
-    job?.status === "scanning"
-      ? "Preparando vista previa…"
-      : job?.status === "running"
-        ? `Limpieza en curso · ${job.done} de ${job.total}`
-        : job?.status === "ready"
-          ? `${job.total} elementos para revisar`
-          : job?.status === "error"
-            ? "La limpieza necesita atención"
-            : "Borra tweets, likes y respuestas antiguos";
 
   return (
     <>
@@ -181,45 +174,62 @@ function ConnectedDashboard({
         </div>
       )}
       <ConnectionPanel {...api} />
-      <BillingPanel
-        billing={data.billing}
-        returnState={billingReturn}
-        refresh={refresh}
-      />
-      <BpnPanel {...api} />
-      <details className="disclosure panel" id="activity">
-        <summary>
-          <div>
-            <h2>
-              {reviews
-                ? `${reviews} ${reviews === 1 ? "respuesta por revisar" : "respuestas por revisar"}`
-                : "Actividad reciente"}
-            </h2>
-            <p className={errors ? "text-destructive" : ""}>
-              {errors
-                ? `${errors} ${errors === 1 ? "error necesita" : "errores necesitan"} atención`
-                : "Revisa las decisiones de BPN"}
+      <nav className="section-nav" aria-label="Tu cuenta">
+        <Link
+          href="/"
+          aria-current={section === "activity" ? "page" : undefined}
+        >
+          BPN y actividad
+        </Link>
+        <Link
+          href="/utilities"
+          aria-current={section === "utilities" ? "page" : undefined}
+        >
+          Utilidades
+        </Link>
+      </nav>
+      {section === "activity" ? (
+        <>
+          <BpnPanel {...api} />
+          <BillingPanel
+            billing={data.billing}
+            returnState={billingReturn}
+            refresh={refresh}
+          />
+          <section
+            className="panel activity-panel"
+            id="activity"
+            aria-labelledby="activity-title"
+          >
+            <ActivityPanel {...api} />
+          </section>
+          <Link href="/utilities" className="utility-link">
+            <span>¿Quieres limpiar tus tweets y likes?</span>
+            <ArrowUpRight className="size-4" />
+          </Link>
+        </>
+      ) : (
+        <section
+          className="panel activity-panel"
+          aria-labelledby="cleanup-title"
+        >
+          <h2 id="cleanup-title" className="text-base font-semibold">
+            Limpiar historial
+          </h2>
+          <p className="mt-2 mb-6 text-sm text-muted-foreground">
+            Borra tus tweets y respuestas, o retira tus likes.
+          </p>
+          {!data.billing.active && (
+            <p className="notice mb-5">
+              Necesitas una suscripción activa.{" "}
+              <Link href="/#billing" className="underline">
+                Ver suscripción
+              </Link>
             </p>
-          </div>
-          {reviews > 0 && <span className="review-dot" aria-hidden="true" />}
-          <ChevronDown className="disclosure-chevron" />
-        </summary>
-        <div className="disclosure-body">
-          <ActivityPanel {...api} />
-        </div>
-      </details>
-      <details className="disclosure panel" id="cleanup">
-        <summary>
-          <div>
-            <h2>Limpiar historial</h2>
-            <p>{cleanupLabel}</p>
-          </div>
-          <ChevronDown className="disclosure-chevron" />
-        </summary>
-        <div className="disclosure-body">
+          )}
           <CleanupPanel {...api} />
-        </div>
-      </details>
+        </section>
+      )}
 
       {busy && (
         <span className="sr-only" role="status">
