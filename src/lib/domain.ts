@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const BPN_REPLY = "block por nabo 🫜";
+export const BPN_REPLY = "mute por nabo 🫜";
 export const BPN_PAGE = "/bpn";
 // A post with a URL costs 40 of our 0.005 USD activity credits.
 export const BPN_REPLY_CREDITS = 40;
@@ -43,8 +43,10 @@ export type Interaction = {
     | "sending"
     | "replied"
     | "blocked"
+    | "muted"
     | "error";
   reply_id: string | null;
+  reply_text: string | null;
   error: string | null;
 };
 export type Usage = {
@@ -67,14 +69,33 @@ export type Snapshot = {
   billing: Billing;
   account: { id: string; username: string; name: string };
   settings: Settings;
+  muteAccess: { read: boolean; write: boolean };
   interactions: Interaction[];
   stats: {
     analyzed: number;
     flagged: number;
     blocked: number;
+    muted: number;
   };
   lastSync: string | null;
   lastError: string | null;
+};
+
+export const mutedPageSchema = z.object({
+  data: z
+    .array(
+      z.object({
+        id: z.string().regex(/^\d+$/),
+        username: z.string().regex(/^[A-Za-z0-9_]{1,15}$/),
+        name: z.string(),
+      }),
+    )
+    .default([]),
+  meta: z.object({ next_token: z.string().optional() }).optional(),
+});
+export type MutedPage = {
+  users: z.infer<typeof mutedPageSchema>["data"];
+  nextCursor: string | null;
 };
 
 export function routeDecision(decision: Decision, settings: Settings) {

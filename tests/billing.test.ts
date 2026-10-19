@@ -28,7 +28,7 @@ import { createCheckout, refreshBilling } from "@/lib/server/billing";
 import { stripe } from "@/lib/server/stripe";
 import { accountXRequest, getAccount } from "@/lib/server/x";
 import { runAccount } from "@/lib/server/worker";
-import { replyAndBlock } from "@/lib/server/moderation";
+import { replyAndMute } from "@/lib/server/moderation";
 import { POST as webhook } from "@/app/api/billing/webhook/route";
 import { POST as checkout } from "@/app/api/billing/checkout/route";
 import { POST as cancelSubscription } from "@/app/api/billing/cancel/route";
@@ -100,6 +100,8 @@ beforeAll(async () => {
   await db.exec(await readFile("db/002-billing.sql", "utf8"));
   await db.exec(await readFile("db/003-x-credits.sql", "utf8"));
   await db.exec(await readFile("db/003-x-credits.sql", "utf8"));
+  await db.exec(await readFile("db/005-mutes.sql", "utf8"));
+  await db.exec(await readFile("db/005-mutes.sql", "utf8"));
   mocks.sql.mockImplementation(
     async (sql, params) => (await db.query(sql, params)).rows,
   );
@@ -122,7 +124,14 @@ beforeEach(async () => {
       [
         id,
         `user${id}`,
-        seal({ access_token: "token", expires_in: 3600 }, `tokens:${id}`),
+        seal(
+          {
+            access_token: "token",
+            expires_in: 3600,
+            scope: "users.read mute.read mute.write",
+          },
+          `tokens:${id}`,
+        ),
         JSON.stringify({ ...defaultSettings, enabled: true }),
       ],
     );
@@ -700,8 +709,8 @@ describe("cost controls on real worker and API paths", () => {
       accountXRequest("1", "token", "/users/1/mentions?expansions=author_id"),
     ).rejects.toMatchObject({ status: 402 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    fetchMock.mockResolvedValue(json({ data: { blocking: true } }));
-    await accountXRequest("1", "token", "/users/1/blocking", {
+    fetchMock.mockResolvedValue(json({ data: { muting: true } }));
+    await accountXRequest("1", "token", "/users/1/muting", {
       method: "POST",
     });
     expect((await billingSnapshot("1")).used.xCredits).toBe(195);
@@ -743,26 +752,118 @@ describe("cost controls on real worker and API paths", () => {
       VALUES('1','100','2','other','Other','hello',now(),true,'review')`);
     fetchMock.mockResolvedValue(json({ data: { id: "100" } }));
     await expect(
-      replyAndBlock(await getAccount("1"), "token", "100"),
+      replyAndMute(await getAccount("1"), "token", "100"),
     ).rejects.toThrow("agotado");
     expect(await query("SELECT status,attempted_at FROM interactions")).toEqual(
       [{ status: "review", attempted_at: null }],
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
-  it("keeps a reply queued without spending credits when the URL reply and block do not fit", async () => {
+  it("keeps a reply queued without spending credits when the URL reply and mute do not fit", async () => {
     await activate();
     await reserveUsage("1", { xCredits: 160 });
     await query(`INSERT INTO interactions(account_id,id,author_id,username,name,text,created_at,status)
       VALUES('1','100','2','other','Other','hello',now(),'pending')`);
     await expect(
-      replyAndBlock(await getAccount("1"), "token", "100"),
+      replyAndMute(await getAccount("1"), "token", "100"),
     ).rejects.toThrow("agotado");
     expect((await billingSnapshot("1")).used.xCredits).toBe(160);
     expect(await query("SELECT status,attempted_at FROM interactions")).toEqual(
       [{ status: "pending", attempted_at: null }],
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("lists the current account's muted users with pagination and settles the read cost", async () => {
+    await activate();
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        json({
+          data: [{ id: "5", name: "Muted", username: "muted" }],
+          meta: { next_token: "page/2+" },
+        }),
+      );
+    const first = await actions(
+      request("/api/actions", { action: "mutes", accountId: "2" }),
+    );
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({
+      users: [{ id: "5", name: "Muted", username: "muted" }],
+      nextCursor: "page/2+",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.x.com/2/users/1/muting?max_results=20",
+    );
+    expect((await billingSnapshot("1")).used).toMatchObject({
+      xCredits: 1,
+      xRequests: 1,
+    });
+    fetchMock.mockResolvedValueOnce(json({ meta: { result_count: 0 } }));
+    const second = await actions(
+      request("/api/actions", { action: "mutes", cursor: "page/2+" }),
+    );
+    expect(await second.json()).toEqual({ users: [], nextCursor: null });
+    expect(
+      new URL(fetchMock.mock.calls[1][0]).searchParams.get("pagination_token"),
+    ).toBe("page/2+");
+    expect((await billingSnapshot("1")).used.xCredits).toBe(1);
+    expect((await billingSnapshot("2")).used.xRequests).toBe(0);
+  });
+  it("rejects mute listing without authorization, scopes or paid access before any X read", async () => {
+    fetchMock.mockReset();
+    expect(
+      (
+        await actions(
+          request(
+            "/api/actions",
+            { action: "mutes" },
+            "https://attacker.example",
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (await actions(request("/api/actions", { action: "mutes" }))).status,
+    ).toBe(402);
+    await query("UPDATE accounts SET tokens=$1 WHERE id='1'", [
+      seal({ access_token: "token", scope: "users.read" }, "tokens:1"),
+    ]);
+    const response = await actions(
+      request("/api/actions", { action: "mutes" }),
+    );
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toContain("Vuelve a conectar X");
+    expect(fetchMock).not.toHaveBeenCalled();
+    mocks.cookie = "";
+    expect(
+      (await actions(request("/api/actions", { action: "mutes" }))).status,
+    ).toBe(401);
+  });
+  it("does not expose partial mute lists or release their uncertain charges", async () => {
+    await activate();
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        json({
+          data: [{ id: "5", name: "Muted", username: "muted" }],
+          errors: [{ title: "partial" }],
+        }),
+      );
+    expect(
+      (await actions(request("/api/actions", { action: "mutes" }))).status,
+    ).toBe(502);
+    expect((await billingSnapshot("1")).used.xCredits).toBe(4);
+  });
+  it("prevents block requests and cross-account mute requests at the adapter", async () => {
+    await expect(
+      accountXRequest("1", "token", "/users/1/blocking", { method: "POST" }),
+    ).rejects.toThrow("sin presupuesto");
+    await expect(
+      accountXRequest("1", "token", "/users/2/muting"),
+    ).rejects.toThrow("sin presupuesto");
+    await expect(
+      accountXRequest("1", "token", "/users/2/muting", { method: "POST" }),
+    ).rejects.toThrow("sin presupuesto");
   });
   it("allows disabling BPN without a subscription", async () => {
     expect(

@@ -17,6 +17,7 @@ const initial: Snapshot = {
   },
   account: { id: "1", username: "cuenta_de_prueba", name: "Cuenta" },
   settings: { ...defaultSettings, enabled: true },
+  muteAccess: { read: true, write: true },
   interactions: [
     {
       id: "100",
@@ -28,6 +29,7 @@ const initial: Snapshot = {
       direct_reply: false,
       status: "blocked",
       reply_id: "999",
+      reply_text: null,
       error: null,
       decision: {
         abuse: 0.99,
@@ -39,7 +41,7 @@ const initial: Snapshot = {
       },
     },
   ],
-  stats: { analyzed: 3, flagged: 1, blocked: 1 },
+  stats: { analyzed: 3, flagged: 1, blocked: 1, muted: 0 },
   lastSync: "2026-10-19T10:00:00Z",
   lastError: null,
 };
@@ -206,18 +208,18 @@ test("shows why a possible insult was not blocked and saves the threshold withou
   await threshold.press("Home");
   await expect(threshold).toHaveAttribute(
     "aria-valuetext",
-    "Baja; umbral de bloqueo 99 %",
+    "Baja; umbral de silenciado 99 %",
   );
   await threshold.press("End");
   await expect(threshold).toHaveAttribute(
     "aria-valuetext",
-    "Alta; umbral de bloqueo 60 %",
+    "Alta; umbral de silenciado 60 %",
   );
   await threshold.press("Home");
   for (let i = 0; i < 14; i++) await threshold.press("ArrowRight");
   await expect(threshold).toHaveAttribute(
     "aria-valuetext",
-    "Media; umbral de bloqueo 85 %",
+    "Media; umbral de silenciado 85 %",
   );
   const request = page.waitForRequest(
     (request) =>
@@ -274,4 +276,107 @@ test("keeps the saved threshold when a settings update fails", async ({
   await expect(
     page.getByRole("slider", { name: "Sensibilidad de BPN" }),
   ).toHaveValue("9");
+});
+
+test("requires reconnection for mute permissions and preserves historical block labels", async ({
+  page,
+}) => {
+  const seed = structuredClone(initial);
+  seed.muteAccess = { read: false, write: false };
+  await mount(page, seed);
+  await expect(
+    page.getByText("Pendiente de permisos", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Reconectar X" }),
+  ).toHaveAttribute("href", "/api/auth/x");
+  await expect(
+    page.getByRole("button", { name: "Ver silenciados" }),
+  ).toHaveCount(0);
+  const historical = page.locator("article").first();
+  await expect(historical).toContainText("Respondida y bloqueada");
+  await expect(historical).toContainText("Ver respuesta enviada");
+  await expect(historical).not.toContainText("mute por nabo");
+});
+
+test("loads muted users only on demand, paginates without duplicates and keeps results on errors", async ({
+  page,
+}) => {
+  const seed = structuredClone(initial);
+  seed.interactions[0].status = "muted";
+  seed.interactions[0].reply_text =
+    "mute por nabo 🫜 https://xpeace.vercel.app/bpn";
+  seed.stats.muted = 1;
+  await page.clock.install();
+  await mount(page, seed);
+  const requests: Record<string, unknown>[] = [];
+  let fail = false;
+  await page.route("**/api/actions", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (fail)
+      return route.fulfill({
+        status: 429,
+        json: { error: "X ha limitado las peticiones." },
+      });
+    const users = body.cursor
+      ? [
+          { id: "2", username: "otra_cuenta", name: "Otra cuenta" },
+          { id: "3", username: "silenciada", name: "Cuenta silenciada" },
+        ]
+      : [{ id: "2", username: "otra_cuenta", name: "Otra cuenta" }];
+    return route.fulfill({
+      json: { users, nextCursor: body.cursor ? null : "next" },
+    });
+  });
+  await page.clock.fastForward(9000);
+  expect(requests).toHaveLength(0);
+  await expect(
+    page.getByText("Respondida y silenciada", { exact: true }),
+  ).toBeVisible();
+  const list = page.getByRole("region", { name: "Usuarios silenciados" });
+  await list.getByRole("button", { name: "Ver silenciados" }).click();
+  await expect(list.getByText("@otra_cuenta", { exact: true })).toBeVisible();
+  await expect(list.getByText(/hay más resultados/)).toBeVisible();
+  await list.getByRole("button", { name: "Cargar más silenciados" }).click();
+  await expect(list.getByText("@silenciada", { exact: true })).toBeVisible();
+  await expect(list.getByText("@otra_cuenta", { exact: true })).toHaveCount(1);
+  await expect(
+    list.getByRole("button", { name: "Cargar más silenciados" }),
+  ).toHaveCount(0);
+  expect(requests).toEqual([
+    { action: "mutes" },
+    { action: "mutes", cursor: "next" },
+  ]);
+  fail = true;
+  await list.getByRole("button", { name: "Actualizar lista" }).click();
+  await expect(list.getByRole("alert")).toContainText(
+    "Se conservan los últimos resultados",
+  );
+  await expect(list.getByText("@silenciada", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "test-results/muted-users-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("shows an empty mute list only after X returns a complete empty result", async ({
+  page,
+}) => {
+  await mount(page);
+  const list = page.getByRole("region", { name: "Usuarios silenciados" });
+  await expect(
+    list.getByText("No tienes usuarios silenciados en X."),
+  ).toHaveCount(0);
+  await page.route("**/api/actions", (route) =>
+    route.fulfill({ json: { users: [], nextCursor: null } }),
+  );
+  await list.getByRole("button", { name: "Ver silenciados" }).click();
+  await expect(
+    list.getByText("No tienes usuarios silenciados en X."),
+  ).toBeVisible();
 });

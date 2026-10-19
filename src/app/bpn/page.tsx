@@ -5,7 +5,7 @@ import { AppHeader } from "@/components/app-header";
 export const metadata: Metadata = {
   title: "Block por nabo 🫜 — xpeace",
   description:
-    "xpeace analiza respuestas y menciones en X. Una respuesta automática indica una detección; el bloqueo depende del acceso de la aplicación a X.",
+    "xpeace analiza respuestas y menciones en X. BPN responde a los malos modos y silencia al autor en X.",
 };
 
 export default function BpnPage() {
@@ -22,7 +22,7 @@ export default function BpnPage() {
           </h1>
           <p>
             Si has llegado aquí desde una respuesta automática, BPN ha marcado
-            tu mensaje como ofensivo. La respuesta y el bloqueo son acciones
+            tu mensaje como ofensivo. La respuesta y el silenciado son acciones
             separadas.
           </p>
         </div>
@@ -32,9 +32,9 @@ export default function BpnPage() {
           </h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
             El usuario al que has respondido utiliza xpeace para filtrar los
-            insultos y los malos modos en X. Cuando una respuesta o mención se
-            supera el umbral de abuso, BPN responde y solicita el bloqueo. X
-            puede rechazar el bloqueo aunque la respuesta se haya publicado.
+            insultos y los malos modos en X. Cuando una respuesta o mención
+            supera el umbral de abuso, BPN responde y silencia al autor. El
+            panel distingue la respuesta enviada del silencio confirmado por X.
           </p>
         </section>
         <section
@@ -52,11 +52,11 @@ export default function BpnPage() {
               ],
               [
                 "Responde",
-                "Si detecta contenido ofensivo, contesta «block por nabo 🫜» con un enlace a esta página.",
+                "Si detecta contenido ofensivo, contesta «mute por nabo 🫜» con un enlace a esta página.",
               ],
               [
-                "Bloquea",
-                "El bloqueo automático requiere acceso Enterprise de X. Si no está disponible, el usuario puede bloquear desde X; la respuesta no confirma que ya lo haya hecho.",
+                "Silencia",
+                "Sus publicaciones dejan de aparecer en tu cronología. Silenciar no impide que esa persona vea tus publicaciones o te responda. El silencio es privado en X; la respuesta de BPN sí es pública.",
               ],
             ].map(([title, description], index) => (
               <li key={title} className="flex gap-3">

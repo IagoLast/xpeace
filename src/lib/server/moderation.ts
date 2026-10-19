@@ -18,6 +18,7 @@ import {
   accountXRequest,
   xRequest,
   XError,
+  requireMuteScope,
 } from "./x";
 import { BillingError, billingSnapshot, reserveUsage } from "./billing-access";
 
@@ -103,11 +104,12 @@ async function excluded(account: Account, item: Interaction) {
   return !!optedOut.length;
 }
 
-export async function replyAndBlock(
+export async function replyAndMute(
   account: Account,
   token: string,
   id: string,
 ) {
+  requireMuteScope(account, "mute.write");
   const [item] = await query<Interaction>(
     "SELECT * FROM interactions WHERE account_id=$1 AND id=$2",
     [account.id, id],
@@ -126,7 +128,7 @@ export async function replyAndBlock(
       "Has alcanzado el máximo de 25 respuestas BPN en 24 horas.",
     );
   const recent = await query(
-    "SELECT 1 FROM interactions WHERE account_id=$1 AND author_id=$2 AND (status='blocked' OR attempted_at > now()-interval '1 day') LIMIT 1",
+    "SELECT 1 FROM interactions WHERE account_id=$1 AND author_id=$2 AND (status IN ('muted','blocked') OR attempted_at > now()-interval '1 day') LIMIT 1",
     [account.id, item.author_id],
   );
   if (recent.length) {
@@ -136,7 +138,7 @@ export async function replyAndBlock(
     );
     return;
   }
-  // Check the whole reply + block before spending on the target lookup. Each
+  // Check the whole reply + mute before spending on the target lookup. Each
   // request still reserves its own quota atomically at the external boundary.
   const billing = await billingSnapshot(account.id);
   if (
@@ -146,7 +148,7 @@ export async function replyAndBlock(
       billing.limits.xRequests - billing.used.xRequests < 3)
   )
     throw new BillingError(
-      "Has agotado el cupo disponible para responder y bloquear. Se reanudará en la renovación.",
+      "Has agotado el cupo disponible para responder y silenciar. Se reanudará en la renovación.",
       billing.periodEnd ? new Date(billing.periodEnd) : undefined,
     );
   // Verify the target still exists before publishing a reply.
@@ -155,8 +157,8 @@ export async function replyAndBlock(
   await reserveUsage(account.id, { xRequests: 1, xCredits: BPN_REPLY_CREDITS });
   // Durable claim precedes the external side effect. An interrupted/ambiguous send is NEVER retried.
   const claimed = await query(
-    "UPDATE interactions SET status='sending',attempted_at=now(),block_requested=true WHERE account_id=$1 AND id=$2 AND status IN ('pending','review') RETURNING id",
-    [account.id, id],
+    "UPDATE interactions SET status='sending',attempted_at=now(),mute_requested=true,reply_text=$3 WHERE account_id=$1 AND id=$2 AND status IN ('pending','review') RETURNING id",
+    [account.id, id, `${BPN_REPLY} ${appUrl()}${BPN_PAGE}`],
   );
   if (!claimed.length) return;
   try {
@@ -185,38 +187,34 @@ export async function replyAndBlock(
     );
     throw new HttpError(rejected ? error.status : 502, message);
   }
-  await blockAuthor(account.id, token, item);
+  await muteAuthor(account.id, token, item);
 }
 
-async function blockAuthor(
-  accountId: string,
-  token: string,
-  item: Interaction,
-) {
+async function muteAuthor(accountId: string, token: string, item: Interaction) {
   try {
-    const result = await accountXRequest<{ data?: { blocking?: boolean } }>(
+    const result = await accountXRequest<{ data?: { muting?: boolean } }>(
       accountId,
       token,
-      `/users/${accountId}/blocking`,
+      `/users/${accountId}/muting`,
       {
         method: "POST",
         body: JSON.stringify({ target_user_id: item.author_id }),
       },
     );
-    if (result.data?.blocking !== true)
-      throw new Error("X no ha confirmado el bloqueo.");
+    if (result.data?.muting !== true)
+      throw new Error("X no ha confirmado el silencio.");
     await query(
-      "UPDATE interactions SET status='blocked',error=NULL WHERE account_id=$1 AND id=$2 AND status='replied'",
+      "UPDATE interactions SET status='muted',error=NULL WHERE account_id=$1 AND id=$2 AND status='replied'",
       [accountId, item.id],
     );
   } catch (error) {
-    if (error instanceof XError && error.status === 403) {
+    if (error instanceof XError && [400, 403, 404].includes(error.status)) {
       await query(
-        "UPDATE interactions SET block_requested=false,error=$3 WHERE account_id=$1 AND id=$2 AND status='replied'",
+        "UPDATE interactions SET mute_requested=false,error=$3 WHERE account_id=$1 AND id=$2 AND status='replied'",
         [
           accountId,
           item.id,
-          `Respuesta enviada, pero no se ha bloqueado al autor. ${error.message} Puedes bloquearlo desde su perfil en X. No se reintentará este bloqueo automáticamente.`,
+          `Respuesta enviada, pero no se ha silenciado al autor. ${error.message} Puedes silenciarlo desde su perfil en X. No se reintentará este silencio automáticamente.`,
         ],
       );
       return;
@@ -226,7 +224,7 @@ async function blockAuthor(
       [
         accountId,
         item.id,
-        "Respuesta enviada; bloqueo pendiente. Se reintentará sin repetir la respuesta.",
+        "Respuesta enviada; silencio pendiente. Se reintentará sin repetir la respuesta.",
       ],
     );
     throw error;
@@ -242,13 +240,14 @@ export async function recoverSideEffects(
     "UPDATE interactions SET status='error',error='Envío interrumpido. Comprueba X; no se reenviará automáticamente.' WHERE account_id=$1 AND status='sending' AND attempted_at < now()-interval '2 minutes'",
     [account.id],
   );
-  const pendingBlocks = await query<Interaction>(
-    "SELECT * FROM interactions WHERE account_id=$1 AND status='replied' AND block_requested=true LIMIT 3",
+  const pendingMutes = await query<Interaction>(
+    "SELECT * FROM interactions WHERE account_id=$1 AND status='replied' AND mute_requested=true LIMIT 3",
     [account.id],
   );
-  for (const item of pendingBlocks) {
+  if (pendingMutes.length) requireMuteScope(account, "mute.write");
+  for (const item of pendingMutes) {
     if (Date.now() > deadline) return;
-    await blockAuthor(account.id, token, item);
+    await muteAuthor(account.id, token, item);
   }
 }
 
@@ -258,6 +257,7 @@ export async function processModeration(
   deadline: number,
 ) {
   if (!account.settings.enabled) return;
+  requireMuteScope(account, "mute.write");
   const items = await query<Interaction>(
     "SELECT * FROM interactions WHERE account_id=$1 AND status IN ('pending','review') ORDER BY created_at,id LIMIT 5",
     [account.id],
@@ -287,7 +287,7 @@ export async function processModeration(
       // Provider failure leaves the item pending: no guessed classification and no action.
       throw new HttpError(
         503,
-        "JEV no ha podido evaluar la interacción. Se mantiene pendiente, sin responder ni bloquear.",
+        "JEV no ha podido evaluar la interacción. Se mantiene pendiente, sin responder ni silenciar.",
       );
     }
     decision = { ...decision, threshold: account.settings.threshold };
@@ -308,7 +308,7 @@ export async function processModeration(
     );
     if (route === "send") {
       if (Date.now() >= deadline) return;
-      await replyAndBlock(account, token, item.id);
+      await replyAndMute(account, token, item.id);
     }
   }
 }

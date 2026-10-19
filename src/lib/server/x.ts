@@ -3,7 +3,7 @@ import { z } from "zod";
 import { required } from "./config";
 import { query } from "./db";
 import { seal, unseal } from "./crypto";
-import type { Settings } from "../domain";
+import { mutedPageSchema, type Settings } from "../domain";
 import { BillingError, billingSnapshot, reserveUsage } from "./billing-access";
 
 export type Account = {
@@ -43,26 +43,53 @@ export type Timeline = {
   includes?: { users?: { id: string; username: string; name: string }[] };
 };
 
+export function hasMuteScope(
+  account: Account,
+  scope: "mute.read" | "mute.write",
+) {
+  try {
+    const scopes = new Set(
+      unseal<Tokens>(account.tokens, `tokens:${account.id}`).scope?.split(" "),
+    );
+    return scopes.has(scope) && scopes.has("users.read");
+  } catch {
+    return false;
+  }
+}
+
+export function requireMuteScope(
+  account: Account,
+  scope: "mute.read" | "mute.write",
+) {
+  if (!hasMuteScope(account, scope))
+    throw new XError(403, undefined, "mute", true);
+}
+
 export class XError extends Error {
   constructor(
     public status: number,
     public retryAt?: Date,
-    public operation?: "read" | "reply" | "block",
+    public operation?: "read" | "reply" | "block" | "mute",
+    missingMuteScope = false,
   ) {
     super(
-      status === 403 && operation === "block"
-        ? "X ha rechazado el bloqueo. Bloquear por API requiere acceso Enterprise, además del permiso block.write."
-        : status === 403 && operation === "reply"
-          ? "X ha rechazado la respuesta. Revisa los permisos de publicación y las restricciones de esa conversación."
-          : status === 429
-            ? "X ha limitado las peticiones. Se reanudará cuando termine la espera."
-            : status === 401
-              ? "La autorización de X ha caducado. Vuelve a conectar la cuenta."
-              : status === 403
-                ? "X ha rechazado la operación. Comprueba los permisos y el acceso de tu aplicación."
-                : status === 402
-                  ? "X requiere saldo o acceso adicional para esta operación."
-                  : `X no pudo completar la operación (${status}).`,
+      missingMuteScope
+        ? "Vuelve a conectar X para autorizar la consulta de usuarios silenciados y el silenciado automático."
+        : status === 403 && operation === "mute"
+          ? "X ha rechazado la operación de silenciado. Revisa el acceso de la aplicación y vuelve a conectar X para renovar sus permisos."
+          : status === 403 && operation === "block"
+            ? "X ha rechazado el bloqueo. Bloquear por API requiere acceso Enterprise, además del permiso block.write."
+            : status === 403 && operation === "reply"
+              ? "X ha rechazado la respuesta. Revisa los permisos de publicación y las restricciones de esa conversación."
+              : status === 429
+                ? "X ha limitado las peticiones. Se reanudará cuando termine la espera."
+                : status === 401
+                  ? "La autorización de X ha caducado. Vuelve a conectar la cuenta."
+                  : status === 403
+                    ? "X ha rechazado la operación. Comprueba los permisos y el acceso de tu aplicación."
+                    : status === 402
+                      ? "X requiere saldo o acceso adicional para esta operación."
+                      : `X no pudo completar la operación (${status}).`,
     );
   }
 }
@@ -85,18 +112,41 @@ export async function xRequest<T>(
   if (!response.ok) {
     const method = (init.method ?? "GET").toUpperCase();
     const pathname = new URL(`https://api.x.com/2${path}`).pathname;
-    const operation =
-      method === "POST" && /\/blocking$/.test(pathname)
+    const operation = /\/muting(?:\/\d+)?$/.test(pathname)
+      ? "mute"
+      : method === "POST" && /\/blocking$/.test(pathname)
         ? "block"
         : method === "POST" && pathname === "/2/tweets"
           ? "reply"
           : "read";
-    // Log the operation, never credentials, post text, or provider response bodies.
+    // Retain machine-readable diagnostics without logging provider free text,
+    // credentials, user IDs, or request bodies.
+    const problem = await response.json().catch(() => null);
+    const problemType =
+      typeof problem?.type === "string"
+        ? problem.type.match(
+            /^https:\/\/api\.(?:twitter|x)\.com\/2\/problems\/([a-z-]+)$/,
+          )?.[1]
+        : undefined;
+    const reason =
+      typeof problem?.reason === "string" &&
+      /^[a-z_-]{1,64}$/i.test(problem.reason)
+        ? problem.reason
+        : undefined;
+    const codes = Array.isArray(problem?.errors)
+      ? problem.errors
+          .map((e: { code?: unknown }) => e?.code)
+          .filter((code: unknown) => Number.isSafeInteger(code))
+          .slice(0, 10)
+      : undefined;
     console.error("x_request_failed", {
       status: response.status,
       operation,
       method,
       endpoint: pathname.replace(/\d+/g, ":id"),
+      problemType,
+      reason,
+      codes,
     });
     const reset = Number(response.headers.get("x-rate-limit-reset"));
     const retry = Number(response.headers.get("retry-after"));
@@ -151,6 +201,8 @@ export async function accountXRequest<T>(
   const method = (init.method ?? "GET").toUpperCase();
   const timeline =
     method === "GET" && /^\/2\/users\/\d+\/mentions$/.test(url.pathname);
+  const muteList =
+    method === "GET" && url.pathname === `/2/users/${accountId}/muting`;
   let credits: number;
   if (timeline) {
     const expansions = url.searchParams.get("expansions");
@@ -175,6 +227,26 @@ export async function accountXRequest<T>(
     }
     url.searchParams.set("max_results", String(count));
     credits = count * perPost;
+  } else if (muteList) {
+    if (
+      [...url.searchParams.keys()].some(
+        (key) => !["max_results", "pagination_token"].includes(key),
+      )
+    )
+      throw new Error("Consulta de silenciados sin presupuesto definido.");
+    const billing = await billingSnapshot(accountId);
+    const available = billing.limits.xCredits - billing.used.xCredits;
+    const count = Math.min(20, Math.max(0, available) * 5);
+    if (!count) {
+      await reserveUsage(accountId, { xRequests: 0 });
+      throw new BillingError(
+        "Has agotado el cupo para consultar X. Se reanudará en la renovación.",
+        billing.periodEnd ? new Date(billing.periodEnd) : undefined,
+      );
+    }
+    url.searchParams.set("max_results", String(count));
+    // Mute reads are $0.001/resource: round each page up to $0.005 credits.
+    credits = Math.ceil(count / 5);
   } else if (
     method === "GET" &&
     /^\/2\/tweets\/\d+$/.test(url.pathname) &&
@@ -183,7 +255,8 @@ export async function accountXRequest<T>(
     credits = 1;
   } else if (
     method === "POST" &&
-    /^\/2\/users\/\d+\/blocking$/.test(url.pathname)
+    url.pathname === `/2/users/${accountId}/muting` &&
+    !url.search
   ) {
     credits = 3;
   } else {
@@ -205,6 +278,9 @@ export async function accountXRequest<T>(
     await receipt.settleXCredits(
       (page.data?.length ?? 0) + 2 * (page.includes?.users?.length ?? 0),
     );
+  } else if (muteList) {
+    const page = mutedPageSchema.parse(result);
+    await receipt.settleXCredits(Math.ceil(page.data.length / 5));
   }
   return result;
 }
@@ -220,6 +296,7 @@ export async function accessToken(account: Account) {
     refresh_token: old.refresh_token,
   });
   tokens.refresh_token ??= old.refresh_token;
+  tokens.scope ??= old.scope;
   await query(
     "UPDATE accounts SET tokens=$2, token_expires_at=$3 WHERE id=$1",
     [

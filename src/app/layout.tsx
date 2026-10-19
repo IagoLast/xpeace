@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "xpeace — Menos ruido. Más paz.",
   description:
-    "BPN analiza tus respuestas y menciones, responde a los malos modos y muestra el resultado del bloqueo.",
+    "BPN analiza tus respuestas y menciones, responde a los malos modos y silencia al autor en X.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

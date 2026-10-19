@@ -7,6 +7,7 @@ import type { Snapshot } from "@/lib/domain";
 import { ActivityPanel } from "./interactions";
 import { BpnPanel, ConnectAccount, ConnectionPanel } from "./settings-panel";
 import { BillingPanel } from "./billing-panel";
+import { MutedUsersPanel } from "./muted-users";
 
 export type Action = { action: string; [key: string]: unknown };
 export type DashboardApi = {
@@ -64,8 +65,8 @@ export function Dashboard({
                   "Detecta si hay un insulto o una falta de respeto.",
                 ],
                 [
-                  "Bloquea si hace falta",
-                  "Solicita el bloqueo si el acceso de la aplicación a X lo permite. Si falla, muestra el motivo.",
+                  "Silencia si hace falta",
+                  "Responde y silencia a quienes superan tu umbral de abuso.",
                 ],
               ].map(([title, description], index) => (
                 <li key={title} className="flex gap-3 sm:block">
@@ -179,6 +180,7 @@ function ConnectedDashboard({
       )}
       <ConnectionPanel {...api} />
       <BpnPanel {...api} />
+      <MutedUsersPanel {...api} />
       <BillingPanel
         billing={data.billing}
         returnState={billingReturn}

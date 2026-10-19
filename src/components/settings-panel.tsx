@@ -11,7 +11,8 @@ import { BPN_REPLY } from "@/lib/domain";
 import type { DashboardApi } from "./dashboard";
 
 export function BpnPanel({ data, busy, act }: DashboardApi) {
-  const active = data.settings.enabled && data.billing.active;
+  const active =
+    data.settings.enabled && data.billing.active && data.muteAccess.write;
   return (
     <Card className="panel bpn-panel">
       <div className="flex items-center gap-2.5">
@@ -21,18 +22,33 @@ export function BpnPanel({ data, busy, act }: DashboardApi) {
           <span
             className={`size-1.5 rounded-full ${active ? "bg-primary" : "bg-muted-foreground"}`}
           />
-          {active ? "Activo" : "En pausa"}
+          {!data.muteAccess.write && data.settings.enabled
+            ? "Pendiente de permisos"
+            : active
+              ? "Activo"
+              : "En pausa"}
         </span>
       </div>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
         Analiza las respuestas a tus tweets y tus menciones. Si alguien se pasa,
-        responde y solicita el bloqueo.
+        responde y silencia al autor en X.
       </p>
       <p className="notice mt-4 text-sm">
-        X exige acceso Enterprise para bloquear desde una aplicación. Si X
-        rechaza el bloqueo, verás el motivo y un enlace al perfil para hacerlo
-        manualmente. Una respuesta enviada no confirma un bloqueo.
+        BPN ahora silencia: dejas de ver sus publicaciones, pero la otra persona
+        puede seguir viendo las tuyas y respondiéndote. El historial confirma
+        cuándo X ha aceptado el silencio.
       </p>
+      {(!data.muteAccess.read || !data.muteAccess.write) && (
+        <div className="notice mt-4" role="status">
+          <p className="text-sm">
+            Vuelve a conectar X para autorizar el silenciado automático y
+            consultar tu lista. BPN no actuará hasta tener los permisos.
+          </p>
+          <Button asChild size="sm" className="mt-3">
+            <a href="/api/auth/x">Reconectar X</a>
+          </Button>
+        </div>
+      )}
       <div className="reply-preview mt-5">
         <p className="text-sm font-medium">{BPN_REPLY}</p>
         <Link
@@ -57,7 +73,11 @@ export function BpnPanel({ data, busy, act }: DashboardApi) {
         <Switch
           id="bpn-enabled"
           checked={data.settings.enabled}
-          disabled={busy || (!data.billing.active && !data.settings.enabled)}
+          disabled={
+            busy ||
+            ((!data.billing.active || !data.muteAccess.write) &&
+              !data.settings.enabled)
+          }
           onCheckedChange={(enabled) =>
             void act(
               {
@@ -115,7 +135,7 @@ function BpnThreshold({ data, busy, act }: DashboardApi) {
         value={99 - percentage}
         onChange={(event) => setPercentage(99 - Number(event.target.value))}
         disabled={disabled}
-        aria-valuetext={`${sensitivity}; umbral de bloqueo ${percentage} %`}
+        aria-valuetext={`${sensitivity}; umbral de silenciado ${percentage} %`}
         aria-describedby="bpn-sensitivity-help bpn-sensitivity-scope"
         className="mt-3 h-8 w-full cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
       />
@@ -130,7 +150,7 @@ function BpnThreshold({ data, busy, act }: DashboardApi) {
         id="bpn-sensitivity-help"
         className="mt-4 text-sm leading-relaxed text-muted-foreground"
       >
-        Responde y bloquea a partir de un{" "}
+        Responde y silencia a partir de un{" "}
         <output
           htmlFor="bpn-sensitivity"
           className="font-semibold tabular-nums text-foreground"

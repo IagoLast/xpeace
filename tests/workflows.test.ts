@@ -21,9 +21,10 @@ import {
   ingestMentions,
   processModeration,
   recoverSideEffects,
-  replyAndBlock,
+  replyAndMute,
 } from "@/lib/server/moderation";
 import { getAccount, xRequest, XError } from "@/lib/server/x";
+import { seal } from "@/lib/server/crypto";
 import { snapshot } from "@/lib/server/snapshot";
 
 let db: PGlite;
@@ -48,6 +49,8 @@ beforeAll(async () => {
   await db.exec(await readFile("db/002-billing.sql", "utf8"));
   await db.exec(await readFile("db/003-x-credits.sql", "utf8"));
   await db.exec(await readFile("db/003-x-credits.sql", "utf8"));
+  await db.exec(await readFile("db/005-mutes.sql", "utf8"));
+  await db.exec(await readFile("db/005-mutes.sql", "utf8"));
   mocks.sql.mockImplementation(
     async (sql, params) => (await db.query(sql, params)).rows,
   );
@@ -60,7 +63,20 @@ beforeEach(async () => {
   await db.exec("TRUNCATE accounts CASCADE; TRUNCATE locks;");
   await query(
     "INSERT INTO accounts(id,username,name,tokens,token_expires_at,settings) VALUES($1,$2,$3,$4,now()+interval '1 hour',$5::jsonb)",
-    ["1", "owner", "Owner", "encrypted", JSON.stringify(settings)],
+    [
+      "1",
+      "owner",
+      "Owner",
+      seal(
+        {
+          access_token: "token",
+          expires_in: 3600,
+          scope: "users.read mute.read mute.write",
+        },
+        "tokens:1",
+      ),
+      JSON.stringify(settings),
+    ],
   );
   await query(`INSERT INTO billing_subscriptions(id,account_id,status,price_id,paid,period_start,period_end)
     VALUES('sub_fixture','1','active','price_fixture',true,now()-interval '1 day',now()+interval '29 days')`);
@@ -93,6 +109,62 @@ const current = async (id = "100") =>
   )[0];
 
 describe("persistent moderation", () => {
+  it("requires mute permission before analysis or any external action", async () => {
+    await interaction("pending");
+    await query("UPDATE accounts SET tokens=$1", [
+      seal(
+        { access_token: "token", scope: "users.read block.write" },
+        "tokens:1",
+      ),
+    ]);
+    await expect(
+      processModeration(await getAccount("1"), "token", Date.now() + 10_000),
+    ).rejects.toThrow("Vuelve a conectar X");
+    expect(mocks.evaluate).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await current()).toMatchObject({
+      status: "pending",
+      reply_id: null,
+    });
+    expect((await snapshot(await getAccount("1"))).muteAccess).toEqual({
+      read: false,
+      write: false,
+    });
+  });
+  it("keeps historical blocks and never converts old pending blocks into mutes", async () => {
+    await interaction("blocked", "98");
+    await interaction("replied", "99", "3");
+    await query("UPDATE interactions SET block_requested=true WHERE id='99'");
+    await db.exec(await readFile("db/005-mutes.sql", "utf8"));
+    await recoverSideEffects(
+      await getAccount("1"),
+      "token",
+      Date.now() + 10_000,
+    );
+    expect((await current("98")).status).toBe("blocked");
+    expect((await current("99")).status).toBe("replied");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await snapshot(await getAccount("1"))).stats).toMatchObject({
+      blocked: 1,
+      muted: 0,
+    });
+  });
+  it("does not mark a mute complete until X confirms it", async () => {
+    await interaction();
+    fetchMock
+      .mockResolvedValueOnce(json({ data: { id: "100" } }))
+      .mockResolvedValueOnce(json({ data: { id: "999" } }))
+      .mockResolvedValueOnce(json({ data: { muting: false } }));
+    await expect(
+      replyAndMute(await getAccount("1"), "token", "100"),
+    ).rejects.toThrow("no ha confirmado");
+    expect(await current()).toMatchObject({
+      status: "replied",
+      reply_id: "999",
+      reply_text: "mute por nabo 🫜 http://localhost:3000/bpn",
+    });
+    expect((await snapshot(await getAccount("1"))).stats.muted).toBe(0);
+  });
   it("records the applied threshold and uses changes only for unprocessed messages", async () => {
     await interaction("pending");
     mocks.evaluate.mockResolvedValue({
@@ -118,14 +190,14 @@ describe("persistent moderation", () => {
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "101" } }))
       .mockResolvedValueOnce(json({ data: { id: "999" } }))
-      .mockResolvedValueOnce(json({ data: { blocking: true } }));
+      .mockResolvedValueOnce(json({ data: { muting: true } }));
     await processModeration(
       await getAccount("1"),
       "token",
       Date.now() + 10_000,
     );
     expect(await current("101")).toMatchObject({
-      status: "blocked",
+      status: "muted",
       decision: { abuse: 0.89, threshold: 0.89 },
     });
     expect(await current()).toMatchObject({
@@ -136,24 +208,24 @@ describe("persistent moderation", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("replies with the exact phrase, then blocks, without a second send", async () => {
+  it("replies with the exact phrase, then mutes, without a second send", async () => {
     await interaction();
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockResolvedValueOnce(json({ data: { id: "999" } }))
-      .mockResolvedValueOnce(json({ data: { blocking: true } }));
-    await replyAndBlock(await getAccount("1"), "token", "100");
+      .mockResolvedValueOnce(json({ data: { muting: true } }));
+    await replyAndMute(await getAccount("1"), "token", "100");
     await expect(current()).resolves.toMatchObject({
-      status: "blocked",
+      status: "muted",
       reply_id: "999",
     });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
-      text: "block por nabo 🫜 http://localhost:3000/bpn",
+      text: "mute por nabo 🫜 http://localhost:3000/bpn",
       reply: { in_reply_to_tweet_id: "100" },
     });
-    expect(fetchMock.mock.calls[2][0]).toContain("/users/1/blocking");
+    expect(fetchMock.mock.calls[2][0]).toContain("/users/1/muting");
     await expect(
-      replyAndBlock(await getAccount("1"), "token", "100"),
+      replyAndMute(await getAccount("1"), "token", "100"),
     ).rejects.toThrow("ya se ha procesado");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -163,30 +235,30 @@ describe("persistent moderation", () => {
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockRejectedValueOnce(new Error("timeout after POST"));
     const account = await getAccount("1");
-    await expect(replyAndBlock(account, "token", "100")).rejects.toMatchObject({
+    await expect(replyAndMute(account, "token", "100")).rejects.toMatchObject({
       status: 502,
     });
     await recoverSideEffects(account, "token", Date.now() + 10_000);
     expect(await current()).toMatchObject({ status: "error", reply_id: null });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
-  it("resumes a failed block without repeating the reply", async () => {
+  it("resumes a failed mute without repeating the reply", async () => {
     await interaction();
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockResolvedValueOnce(json({ data: { id: "999" } }))
       .mockResolvedValueOnce(json({}, 503));
     const account = await getAccount("1");
-    await expect(replyAndBlock(account, "token", "100")).rejects.toBeInstanceOf(
+    await expect(replyAndMute(account, "token", "100")).rejects.toBeInstanceOf(
       XError,
     );
     expect(await current()).toMatchObject({
       status: "replied",
       reply_id: "999",
     });
-    fetchMock.mockResolvedValueOnce(json({ data: { blocking: true } }));
+    fetchMock.mockResolvedValueOnce(json({ data: { muting: true } }));
     await recoverSideEffects(account, "token", Date.now() + 10_000);
-    expect(await current()).toMatchObject({ status: "blocked" });
+    expect(await current()).toMatchObject({ status: "muted" });
     expect(
       fetchMock.mock.calls.filter(
         ([url, init]) =>
@@ -194,40 +266,38 @@ describe("persistent moderation", () => {
       ),
     ).toHaveLength(1);
   });
-  it("stops retrying a forbidden block and still evaluates the following message", async () => {
+  it("stops retrying a forbidden mute and still evaluates the following message", async () => {
     await interaction("pending", "100", "2");
     await interaction("pending", "101", "3", "Gracias por compartirlo");
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockResolvedValueOnce(json({ data: { id: "999" } }))
       .mockResolvedValueOnce(json({ title: "Forbidden" }, 403));
-    mocks.evaluate
-      .mockResolvedValueOnce(decision)
-      .mockResolvedValueOnce({
-        ...decision,
-        abuse: 0.01,
-        insult: 0.01,
-        label: "healthy",
-      });
+    mocks.evaluate.mockResolvedValueOnce(decision).mockResolvedValueOnce({
+      ...decision,
+      abuse: 0.01,
+      insult: 0.01,
+      label: "healthy",
+    });
     const account = await getAccount("1");
     await processModeration(account, "token", Date.now() + 10_000);
     expect(await current()).toMatchObject({
       status: "replied",
       reply_id: "999",
-      block_requested: false,
-      error: expect.stringContaining("Enterprise"),
+      mute_requested: false,
+      error: expect.stringContaining("silenciado"),
     });
     expect((await current("101")).status).toBe("allowed");
     await recoverSideEffects(account, "token", Date.now() + 10_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
-  it("shows a rejected reply as rejected and never attempts its block", async () => {
+  it("shows a rejected reply as rejected and never attempts its mute", async () => {
     await interaction("pending");
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockResolvedValueOnce(json({ title: "Forbidden" }, 403));
     await expect(
-      replyAndBlock(await getAccount("1"), "token", "100"),
+      replyAndMute(await getAccount("1"), "token", "100"),
     ).rejects.toMatchObject({
       status: 403,
       message: expect.stringContaining("rechazado la respuesta"),
@@ -265,22 +335,22 @@ describe("persistent moderation", () => {
     expect(mocks.evaluate).not.toHaveBeenCalled();
   });
   it.each([true, false])(
-    "automatically replies and blocks with direct_reply=%s",
+    "automatically replies and mutes with direct_reply=%s",
     async (directReply) => {
       await interaction("pending");
       await query("UPDATE interactions SET direct_reply=$1", [directReply]);
       fetchMock
         .mockResolvedValueOnce(json({ data: { id: "100" } }))
         .mockResolvedValueOnce(json({ data: { id: "999" } }))
-        .mockResolvedValueOnce(json({ data: { blocking: true } }));
+        .mockResolvedValueOnce(json({ data: { muting: true } }));
       await processModeration(
         await getAccount("1"),
         "token",
         Date.now() + 10_000,
       );
-      expect((await current()).status).toBe("blocked");
+      expect((await current()).status).toBe("muted");
       expect(JSON.parse(fetchMock.mock.calls[1][1].body).text).toBe(
-        "block por nabo 🫜 http://localhost:3000/bpn",
+        "mute por nabo 🫜 http://localhost:3000/bpn",
       );
       expect(
         (await snapshot(await getAccount("1"))).billing.used.xCredits,
@@ -304,13 +374,13 @@ describe("persistent moderation", () => {
     fetchMock
       .mockResolvedValueOnce(json({ data: { id: "100" } }))
       .mockResolvedValueOnce(json({ data: { id: "999" } }))
-      .mockResolvedValueOnce(json({ data: { blocking: true } }));
+      .mockResolvedValueOnce(json({ data: { muting: true } }));
     await processModeration(
       await getAccount("1"),
       "token",
       Date.now() + 10_000,
     );
-    expect((await current()).status).toBe("blocked");
+    expect((await current()).status).toBe("muted");
     expect(mocks.evaluate).not.toHaveBeenCalled();
   });
   it("excludes trusted accounts case-insensitively", async () => {
@@ -325,7 +395,7 @@ describe("persistent moderation", () => {
     await interaction("replied", "99");
     await query("UPDATE interactions SET attempted_at=now() WHERE id='99'");
     await interaction();
-    await replyAndBlock(await getAccount("1"), "token", "100");
+    await replyAndMute(await getAccount("1"), "token", "100");
     expect((await current()).status).toBe("ignored");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -362,6 +432,33 @@ describe("persistent moderation", () => {
 });
 
 describe("external boundaries", () => {
+  it("logs provider error codes without publishing private response details", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockResolvedValueOnce(
+      json(
+        {
+          type: "https://api.x.com/2/problems/client-forbidden",
+          reason: "client-not-enrolled",
+          detail: "private-token user@example.com",
+          errors: [{ code: 453, message: "private" }],
+        },
+        403,
+      ),
+    );
+    await expect(
+      xRequest("private-token", "/users/1/muting", { method: "POST" }),
+    ).rejects.toMatchObject({ status: 403, operation: "mute" });
+    expect(log).toHaveBeenCalledWith(
+      "x_request_failed",
+      expect.objectContaining({
+        problemType: "client-forbidden",
+        reason: "client-not-enrolled",
+        codes: [453],
+      }),
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private|user@example/);
+    log.mockRestore();
+  });
   it("serializes concurrent work using the database lease", async () => {
     await withAccountLock("1", async () => {
       await expect(

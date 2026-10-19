@@ -1,6 +1,6 @@
 import "server-only";
 import { query, withAccountLock } from "./db";
-import { accessToken, getAccount, XError } from "./x";
+import { accessToken, getAccount, XError, requireMuteScope } from "./x";
 import {
   ingestMentions,
   processModeration,
@@ -34,12 +34,13 @@ export async function runAccount(accountId: string, sync = false) {
           billing.used.xCredits >= billing.limits.xCredits
         )
           throw error;
-        // A depleted analysis quota must not prevent recovering pending blocks.
+        // A depleted analysis quota must not prevent recovering pending mutes.
         quotaMessage = error.message;
       }
     }
     try {
       await requireSubscription(accountId);
+      if (account.settings.enabled) requireMuteScope(account, "mute.write");
       const token = await accessToken(account);
       if (
         sync ||

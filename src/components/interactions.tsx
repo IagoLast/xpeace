@@ -3,17 +3,18 @@
 import { useState } from "react";
 import { ArrowUpRight, RefreshCw } from "lucide-react";
 import { Button } from "./ui/button";
-import { BPN_REPLY, type Interaction } from "@/lib/domain";
+import type { Interaction } from "@/lib/domain";
 import type { DashboardApi } from "./dashboard";
 
 const labels: Record<Interaction["status"], string> = {
   pending: "Pendiente",
-  allowed: "Sin bloqueo",
+  allowed: "Sin acción",
   review: "Pendiente de procesar",
   ignored: "Sin acción",
   sending: "Enviando",
   replied: "Respondida",
   blocked: "Respondida y bloqueada",
+  muted: "Respondida y silenciada",
   error: "No se pudo completar",
 };
 
@@ -62,7 +63,7 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium">@{item.username}</span>
               <span
-                className={`text-xs ${item.status === "error" ? "text-destructive" : item.status === "blocked" ? "text-primary" : "text-muted-foreground"}`}
+                className={`text-xs ${item.status === "error" ? "text-destructive" : ["blocked", "muted"].includes(item.status) ? "text-primary" : "text-muted-foreground"}`}
               >
                 {item.status === "allowed" &&
                 item.decision?.threshold !== undefined
@@ -86,7 +87,14 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
               </p>
             )}
             {item.reply_id && (
-              <p className="mt-2 text-xs text-primary">↳ {BPN_REPLY}</p>
+              <a
+                href={`https://x.com/${data.account.username}/status/${item.reply_id}`}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-block break-words text-xs text-primary"
+              >
+                ↳ {item.reply_text ?? "Ver respuesta enviada"}
+              </a>
             )}
             {item.error && (
               <p className="mt-2 text-sm text-destructive" role="alert">
@@ -100,7 +108,7 @@ export function ActivityPanel({ data, busy, act }: DashboardApi) {
                 target="_blank"
                 rel="noreferrer"
               >
-                Abrir perfil para bloquear en X
+                Abrir perfil en X
                 <ArrowUpRight className="size-3" />
               </a>
             )}
