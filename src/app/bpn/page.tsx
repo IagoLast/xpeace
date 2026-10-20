@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Block por nabo 🫜 — xpeace",
   description:
     "xpeace analiza respuestas y menciones en X. BPN responde a los malos modos y silencia al autor en X.",
+  twitter: { card: "summary_large_image" },
 };
 
 export default function BpnPage() {

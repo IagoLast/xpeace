@@ -16,6 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: process.env.APP_URL ? new URL(process.env.APP_URL) : undefined,
   title: "xpeace — Menos ruido. Más paz.",
   description:
     "BPN analiza tus respuestas y menciones, responde a los malos modos y silencia al autor en X.",
